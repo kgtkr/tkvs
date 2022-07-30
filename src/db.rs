@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::BufWriter;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
@@ -94,8 +95,31 @@ impl DB {
         let write_set_bytes =
             bincode::serialize(&write_set).context("failed to serialize write set")?;
         atomic_append::append(&mut self.logs_file, write_set_bytes.as_slice())?;
+        self.logs_file
+            .sync_all()
+            .context("failed to sync log file")?;
         self.logs_len += 1;
         self.write_set = BTreeMap::new();
+        if self.logs_len > 10 {
+            self.snapshot().context("failed to snapshot")?;
+        }
+        Ok(())
+    }
+
+    pub fn snapshot(&mut self) -> anyhow::Result<()> {
+        let data_tmp_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&self.data_dir.join("data.tmp"))
+            .context("failed to open data.tmp file")?;
+
+        let mut data_tmp_file_writer = BufWriter::new(&data_tmp_file);
+        bincode::serialize_into(&mut data_tmp_file_writer, &self.values)
+            .context("failed to serialize data")?;
+        data_tmp_file.sync_all().context("failed to sync data")?;
+        std::fs::rename(&self.data_dir.join("data.tmp"), &self.data_dir.join("data"))
+            .context("failed to rename data.tmp to data")?;
         Ok(())
     }
 
