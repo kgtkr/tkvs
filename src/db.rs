@@ -35,22 +35,41 @@ impl DB {
     pub fn new(data_dir: PathBuf) -> anyhow::Result<Self> {
         // とりあえずbincodeを使う
         let values = {
-            let data_file = File::open("data").context("failed to open data file")?;
-            bincode::deserialize_from(BufReader::new(data_file))
-                .context("failed to deserialize data file")?
+            match File::open(data_dir.join("data")) {
+                Ok(data_file) => bincode::deserialize_from(BufReader::new(data_file))
+                    .context("failed to deserialize data file")?,
+                Err(err) => {
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        BTreeMap::new()
+                    } else {
+                        anyhow::bail!("failed to open data file: {}", err);
+                    }
+                }
+            }
         };
 
         let write_sets = {
-            let logs_file = File::open("logs").context("failed to open logs file")?;
-            let mut logs_file_reader = BufReader::new(&logs_file);
-            atomic_append::read_all(&mut logs_file_reader)
-                .context("failed to read logs file")?
-                .into_iter()
-                .map(|log| {
-                    bincode::deserialize(log.as_slice()).context("failed to deserialize log")
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .context("failed to deserialize logs")?
+            match File::open(data_dir.join("logs")) {
+                Ok(logs_file) => {
+                    let mut logs_file_reader = BufReader::new(&logs_file);
+                    atomic_append::read_all(&mut logs_file_reader)
+                        .context("failed to read logs file")?
+                        .into_iter()
+                        .map(|log| {
+                            bincode::deserialize(log.as_slice())
+                                .context("failed to deserialize log")
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                        .context("failed to deserialize logs")?
+                }
+                Err(err) => {
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        Vec::new()
+                    } else {
+                        anyhow::bail!("failed to open logs file: {}", err);
+                    }
+                }
+            }
         };
 
         let logs_len = write_sets.len();
@@ -63,6 +82,7 @@ impl DB {
 
         let logs_file = OpenOptions::new()
             .append(true)
+            .create(true)
             .open(&data_dir.join("logs"))
             .context("failed to open log file")?;
 
@@ -91,9 +111,10 @@ impl DB {
     }
 
     pub fn commit(&mut self) -> anyhow::Result<()> {
-        let write_set = self.write_set.clone();
+        let write_set = &self.write_set;
+        apply_write_set(&mut self.values, write_set);
         let write_set_bytes =
-            bincode::serialize(&write_set).context("failed to serialize write set")?;
+            bincode::serialize(write_set).context("failed to serialize write set")?;
         atomic_append::append(&mut self.logs_file, write_set_bytes.as_slice())?;
         self.logs_file
             .sync_all()
@@ -125,5 +146,26 @@ impl DB {
 
     pub fn abort(&mut self) {
         self.write_set = BTreeMap::new();
+    }
+}
+
+#[test]
+fn test() {
+    use rand::distributions::{Alphanumeric, DistString};
+    use rand::{thread_rng, Rng};
+
+    let mut rng = thread_rng();
+    let dirname: String = (0..8).map(|_| rng.sample(Alphanumeric) as char).collect();
+    let data_dir = PathBuf::from("test-data").join(dirname);
+    std::fs::create_dir(&data_dir).unwrap();
+
+    {
+        let mut db = DB::new(data_dir.clone()).unwrap();
+        db.put(b"k1", b"v1");
+        db.commit().unwrap();
+        assert_eq!(db.get(b"k1"), Some(b"v1".to_vec()));
+        db.put(b"k2", b"v2");
+        db.commit().unwrap();
+        assert_eq!(db.get(b"k1"), Some(b"v1".to_vec()));
     }
 }
