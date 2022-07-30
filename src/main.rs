@@ -35,6 +35,9 @@ fn main() {
             "abort" => {
                 db.abort();
             }
+            "snapshot" => {
+                db.snapshot().unwrap();
+            }
             _ => println!("unknown command: {}", cmd),
         }
     }

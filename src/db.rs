@@ -141,6 +141,10 @@ impl DB {
         data_tmp_file.sync_all().context("failed to sync data")?;
         std::fs::rename(&self.data_dir.join("data.tmp"), &self.data_dir.join("data"))
             .context("failed to rename data.tmp to data")?;
+        self.logs_file
+            .set_len(0)
+            .context("failed to truncate logs file")?;
+        self.logs_len = 0;
         Ok(())
     }
 
