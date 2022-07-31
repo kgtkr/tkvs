@@ -113,7 +113,9 @@ impl DB {
         apply_write_set(&mut self.values, write_set);
         let write_set_bytes =
             bincode::serialize(write_set).context("failed to serialize write set")?;
-        atomic_append::append(&mut self.logs_file, write_set_bytes.as_slice())?;
+        let mut logs_file_writer = BufWriter::new(&self.logs_file);
+        atomic_append::append(&mut logs_file_writer, write_set_bytes.as_slice())?;
+        drop(logs_file_writer);
         self.logs_file
             .sync_all()
             .context("failed to sync log file")?;

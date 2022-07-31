@@ -19,6 +19,7 @@ pub fn append(writer: &mut impl Write, value: &[u8]) -> std::io::Result<()> {
     writer.write_all(hash.as_slice())?;
     writer.write_all((value.len() as u32).to_le_bytes().as_slice())?;
     writer.write_all(value)?;
+    writer.flush()?;
     Ok(())
 }
 
