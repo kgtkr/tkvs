@@ -126,13 +126,15 @@ impl DB {
                     graph.insert(id, HashSet::new());
                 }
                 for (_, lock) in &db.locks {
-                    for to in lock.current_ids().await {
-                        for from in lock.wait_ids().await {
+                    let tos = lock.current_ids().await;
+                    let froms = lock.wait_ids().await;
+                    for &to in &tos {
+                        for &from in &froms {
                             graph.get_mut(&from).unwrap().insert(to);
                         }
                     }
                 }
-                println!("{:?}", graph);
+                drop(db);
 
                 let mut sorted_ids = Vec::new();
                 let mut indegree = HashMap::new();
