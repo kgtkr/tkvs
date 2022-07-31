@@ -100,7 +100,7 @@ impl DB {
         })
     }
 
-    pub fn get(&mut self, trx_id: usize, key: &[u8]) -> Option<Vec<u8>> {
+    pub async fn get(&mut self, trx_id: usize, key: &[u8]) -> Option<Vec<u8>> {
         let trx = self.trxs.get(&trx_id).unwrap();
 
         trx.write_set
@@ -109,19 +109,19 @@ impl DB {
             .unwrap_or_else(|| self.values.get(key).cloned())
     }
 
-    pub fn put(&mut self, trx_id: usize, key: &[u8], value: &[u8]) {
+    pub async fn put(&mut self, trx_id: usize, key: &[u8], value: &[u8]) {
         let trx = self.trxs.get_mut(&trx_id).unwrap();
 
         trx.write_set.insert(key.to_vec(), Some(value.to_vec()));
     }
 
-    pub fn delete(&mut self, trx_id: usize, key: &[u8]) {
+    pub async fn delete(&mut self, trx_id: usize, key: &[u8]) {
         let trx = self.trxs.get_mut(&trx_id).unwrap();
 
         trx.write_set.insert(key.to_vec(), None);
     }
 
-    pub fn commit(&mut self, trx_id: usize) -> anyhow::Result<()> {
+    pub async fn commit(&mut self, trx_id: usize) -> anyhow::Result<()> {
         let trx = self.trxs.get_mut(&trx_id).unwrap();
 
         let write_set = &trx.write_set;
@@ -136,10 +136,13 @@ impl DB {
             .context("failed to sync log file")?;
         self.logs_len += 1;
         trx.write_set = BTreeMap::new();
-        if self.logs_len > 10 {
-            self.snapshot().context("failed to snapshot")?;
-        }
         Ok(())
+    }
+
+    pub async fn abort(&mut self, trx_id: usize) {
+        let trx = self.trxs.get_mut(&trx_id).unwrap();
+
+        trx.write_set = BTreeMap::new();
     }
 
     pub fn snapshot(&mut self) -> anyhow::Result<()> {
@@ -166,12 +169,6 @@ impl DB {
         Ok(())
     }
 
-    pub fn abort(&mut self, trx_id: usize) {
-        let trx = self.trxs.get_mut(&trx_id).unwrap();
-
-        trx.write_set = BTreeMap::new();
-    }
-
     pub fn new_trx(&mut self) -> usize {
         let trx_id = self.trx_count;
         self.trx_count += 1;
@@ -189,6 +186,7 @@ impl DB {
     }
 }
 
+/*
 #[test]
 fn test() {
     use rand::distributions::{Alphanumeric, DistString};
@@ -210,3 +208,4 @@ fn test() {
         assert_eq!(db.get(trx_id, b"k1"), Some(b"v1".to_vec()));
     }
 }
+*/
