@@ -40,6 +40,12 @@ enum LockState {
     Locked(CurrentLock, VecDeque<LockWaiter>),
 }
 
+enum LockModify {
+    InsertHead(usize),
+    InsertLast(usize),
+    Noop,
+}
+
 #[derive(Clone)]
 pub struct Lock(Arc<Mutex<LockState>>);
 
@@ -65,18 +71,22 @@ impl Lock {
                 CurrentLock::Read(cur_ids) if cur_ids.contains(&id) || waiters.len() == 0 => {
                     // Read lockなら無条件でこれを行ってもいいが, writer lockが長時間待たされることを防ぐため, waitersがいない場合のみおこなう
                     cur_ids.insert(id);
+                    // TODO: 所有権の関係で上で変更するのがめんどくさすぎるのでとりあえずpanic
+                    Self::check_deadlock(&*lock, LockModify::Noop).unwrap();
                 }
                 CurrentLock::Write(cur_id) if cur_id == &id => {}
                 _ => {
                     let (tx, rx) = oneshot::channel();
                     if let Some(LockWaiter::Read(read_waiters)) = waiters.back_mut() {
                         read_waiters.insert(id, tx);
+                        Self::check_deadlock(&*lock, LockModify::Noop).unwrap();
                     } else {
                         waiters.push_back(LockWaiter::Read({
                             let mut map = HashMap::new();
                             map.insert(id, tx);
                             map
                         }));
+                        Self::check_deadlock(&*lock, LockModify::Noop).unwrap();
                     }
                     drop(lock);
                     rx.await?;
@@ -103,11 +113,13 @@ impl Lock {
                         }) =>
                 {
                     *current_lock = CurrentLock::Write(id);
+                    Self::check_deadlock(&*lock, LockModify::Noop).unwrap();
                 }
                 CurrentLock::Write(cur_id) if cur_id == &id => {}
                 _ => {
                     let (tx, rx) = oneshot::channel();
                     waiters.push_back(LockWaiter::Write(id, tx));
+                    Self::check_deadlock(&*lock, LockModify::Noop).unwrap();
                     drop(lock);
                     rx.await?;
                 }
@@ -145,6 +157,97 @@ impl Lock {
                 },
                 _ => anyhow::bail!("unlock called on locked lock"),
             },
+        }
+        Ok(())
+    }
+
+    fn check_deadlock(lock_state: &LockState, modify: LockModify) -> anyhow::Result<()> {
+        match lock_state {
+            LockState::Unlocked => {}
+            LockState::Locked(current_lock, waiters) => {
+                let mut ids_list = Vec::new();
+                {
+                    let mut ids = HashSet::new();
+                    match current_lock {
+                        CurrentLock::Read(cur_ids) => {
+                            ids.extend(cur_ids);
+                        }
+                        CurrentLock::Write(cur_id) => {
+                            ids.insert(*cur_id);
+                        }
+                    }
+                    ids_list.push(ids);
+                }
+                for waiter in waiters {
+                    let mut ids = HashSet::new();
+                    match waiter {
+                        LockWaiter::Read(read_waiters) => {
+                            ids.extend(read_waiters.keys());
+                        }
+                        LockWaiter::Write(cur_id, _) => {
+                            ids.insert(*cur_id);
+                        }
+                    }
+                    ids_list.push(ids);
+                }
+                match modify {
+                    LockModify::InsertHead(id) => {
+                        ids_list.first_mut().unwrap().insert(id);
+                    }
+                    LockModify::InsertLast(id) => {
+                        ids_list.last_mut().unwrap().insert(id);
+                    }
+                    LockModify::Noop => {}
+                }
+
+                let all_ids: HashSet<usize> =
+                    ids_list.iter().fold(HashSet::new(), |mut acc, ids| {
+                        acc.extend(ids);
+                        acc
+                    });
+
+                let mut graph = HashMap::new();
+                for id in &all_ids {
+                    graph.insert(id, HashSet::new());
+                }
+                for (ids1, ids2) in ids_list.iter().zip(ids_list.iter().skip(1)) {
+                    for id1 in ids1 {
+                        for id2 in ids2 {
+                            graph.get_mut(id2).unwrap().insert(*id1);
+                        }
+                    }
+                }
+
+                let mut sorted_ids = Vec::new();
+                let mut indegree = HashMap::new();
+                for &id in &all_ids {
+                    indegree.insert(id, 0);
+                }
+                for (_, tos) in graph.iter() {
+                    for to in tos {
+                        *indegree.get_mut(to).unwrap() += 1;
+                    }
+                }
+                let mut queue = VecDeque::new();
+                for (id, indegree) in indegree.iter() {
+                    if *indegree == 0 {
+                        queue.push_back(*id);
+                    }
+                }
+                while let Some(id) = queue.pop_front() {
+                    sorted_ids.push(id);
+                    for &to in graph.get(&id).unwrap() {
+                        *indegree.get_mut(&to).unwrap() -= 1;
+                        if *indegree.get(&to).unwrap() == 0 {
+                            queue.push_back(to);
+                        }
+                    }
+                }
+
+                if sorted_ids.len() != all_ids.len() {
+                    anyhow::bail!("deadlock detected");
+                }
+            }
         }
         Ok(())
     }
