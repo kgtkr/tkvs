@@ -62,7 +62,10 @@ impl Lock {
                 );
             }
             LockState::Locked(current_lock, waiters) => match current_lock {
-                CurrentLock::Read(cur_ids) if cur_ids.contains(&id) => {}
+                CurrentLock::Read(cur_ids) if cur_ids.contains(&id) || waiters.len() == 0 => {
+                    // Read lockなら無条件でこれを行ってもいいが, writer lockが長時間待たされることを防ぐため, waitersがいない場合のみおこなう
+                    cur_ids.insert(id);
+                }
                 CurrentLock::Write(cur_id) if cur_id == &id => {}
                 _ => {
                     let (tx, rx) = oneshot::channel();
