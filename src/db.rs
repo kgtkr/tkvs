@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::future::Future;
 use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::Write;
@@ -112,6 +113,64 @@ impl DB {
         }))))
     }
 
+    async fn wait_without_deadlock(
+        &self,
+        wait: Option<impl Future<Output = anyhow::Result<()>>>,
+    ) -> anyhow::Result<()> {
+        match wait {
+            Some(wait) => {
+                let db = self.0.lock().await;
+                let all_ids = db.trxs.keys().cloned().collect::<HashSet<_>>();
+                let mut graph = HashMap::new();
+                for id in &all_ids {
+                    graph.insert(id, HashSet::new());
+                }
+                for (_, lock) in &db.locks {
+                    for to in lock.current_ids().await {
+                        for from in lock.wait_ids().await {
+                            graph.get_mut(&from).unwrap().insert(to);
+                        }
+                    }
+                }
+                println!("{:?}", graph);
+
+                let mut sorted_ids = Vec::new();
+                let mut indegree = HashMap::new();
+                for &id in &all_ids {
+                    indegree.insert(id, 0);
+                }
+                for (_, tos) in graph.iter() {
+                    for to in tos {
+                        *indegree.get_mut(to).unwrap() += 1;
+                    }
+                }
+                let mut queue = VecDeque::new();
+                for (id, indegree) in indegree.iter() {
+                    if *indegree == 0 {
+                        queue.push_back(*id);
+                    }
+                }
+                while let Some(id) = queue.pop_front() {
+                    sorted_ids.push(id);
+                    for &to in graph.get(&id).unwrap() {
+                        *indegree.get_mut(&to).unwrap() -= 1;
+                        if *indegree.get(&to).unwrap() == 0 {
+                            queue.push_back(to);
+                        }
+                    }
+                }
+
+                if sorted_ids.len() != all_ids.len() {
+                    anyhow::bail!("deadlock detected");
+                }
+
+                wait.await?
+            }
+            None => {}
+        }
+        Ok(())
+    }
+
     pub async fn get(&self, trx_id: usize, key: &[u8]) -> Option<Vec<u8>> {
         let mut db = self.0.lock().await;
         let trx = db.trxs.get(&trx_id).unwrap().clone();
@@ -121,7 +180,9 @@ impl DB {
         trx.locks.insert(key.to_vec(), lock.clone());
 
         drop(db);
-        lock.lock_read(trx_id).await.unwrap();
+        self.wait_without_deadlock(lock.lock_read(trx_id).await.unwrap())
+            .await
+            .unwrap();
 
         let db = self.0.lock().await;
 
@@ -143,7 +204,9 @@ impl DB {
         trx.locks.insert(key.to_vec(), lock.clone());
 
         drop(db);
-        lock.lock_write(trx_id).await.unwrap();
+        self.wait_without_deadlock(lock.lock_write(trx_id).await.unwrap())
+            .await
+            .unwrap();
 
         trx.write_set.insert(key.to_vec(), Some(value.to_vec()));
         drop(trx);
@@ -157,7 +220,9 @@ impl DB {
         trx.locks.insert(key.to_vec(), lock.clone());
 
         drop(db);
-        lock.lock_write(trx_id).await.unwrap();
+        self.wait_without_deadlock(lock.lock_write(trx_id).await.unwrap())
+            .await
+            .unwrap();
 
         trx.write_set.insert(key.to_vec(), None);
         drop(trx);
