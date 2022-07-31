@@ -3,8 +3,9 @@ use anyhow::Context;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::BufReader;
 use std::io::BufWriter;
-use std::io::{BufRead, BufReader};
+use std::io::Write;
 use std::path::PathBuf;
 
 type Key = Vec<u8>;
@@ -135,6 +136,9 @@ impl DB {
         let mut data_tmp_file_writer = BufWriter::new(&data_tmp_file);
         bincode::serialize_into(&mut data_tmp_file_writer, &self.values)
             .context("failed to serialize data")?;
+        data_tmp_file_writer
+            .flush()
+            .context("failed to flush data")?;
         data_tmp_file.sync_all().context("failed to sync data")?;
         std::fs::rename(&self.data_dir.join("data.tmp"), &self.data_dir.join("data"))
             .context("failed to rename data.tmp to data")?;
