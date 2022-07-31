@@ -30,19 +30,21 @@ fn apply_write_set(values: &mut DataBaseValues, write_set: &DataBaseWriteSet) {
     }
 }
 
-pub struct DB {
+struct DBInner {
     data_dir: PathBuf,
     values: DataBaseValues,
     logs_len: usize,
     logs_file: File,
     trx_count: usize,
-    trxs: HashMap<usize, Trx>,
+    trxs: HashMap<usize, Arc<Mutex<Trx>>>,
     locks: HashMap<Key, Lock>,
 }
 
+#[derive(Clone)]
+pub struct DB(Arc<Mutex<DBInner>>);
+
 struct Trx {
     write_set: DataBaseWriteSet,
-    busy: bool,
     locks: Vec<Lock>,
 }
 
@@ -99,7 +101,7 @@ impl DB {
             .open(&data_dir.join("logs"))
             .context("failed to open log file")?;
 
-        Ok(DB {
+        Ok(DB(Arc::new(Mutex::new(DBInner {
             data_dir,
             values,
             logs_len,
@@ -107,154 +109,142 @@ impl DB {
             trx_count: 0,
             trxs: HashMap::new(),
             locks: HashMap::new(),
-        })
+        }))))
     }
 
-    pub async fn get(&mut self, trx_id: usize, key: &[u8]) -> Option<Vec<u8>> {
-        let trx = self.trxs.get_mut(&trx_id).unwrap();
-        if trx.busy {
-            panic!("trx is busy");
-        }
-        trx.busy = true;
-        let lock = self
-            .locks
-            .entry(key.to_vec())
-            .or_insert(Lock::new())
-            .clone();
+    pub async fn get(&self, trx_id: usize, key: &[u8]) -> Option<Vec<u8>> {
+        let mut db = self.0.lock().await;
+        let trx = db.trxs.get(&trx_id).unwrap().clone();
+        let mut trx = trx.try_lock().unwrap();
+
+        let lock = db.locks.entry(key.to_vec()).or_insert(Lock::new()).clone();
+        trx.locks.push(lock.clone());
+
+        drop(db);
         lock.lock_read(trx_id).await.unwrap();
-        trx.locks.push(lock);
+
+        let db = self.0.lock().await;
 
         let result = trx
             .write_set
             .get(key)
             .map(|x| x.clone())
-            .unwrap_or_else(|| self.values.get(key).cloned());
+            .unwrap_or_else(|| db.values.get(key).cloned());
 
-        trx.busy = false;
+        drop(trx);
         result
     }
 
-    pub async fn put(&mut self, trx_id: usize, key: &[u8], value: &[u8]) {
-        let trx = self.trxs.get_mut(&trx_id).unwrap();
-        if trx.busy {
-            panic!("trx is busy");
-        }
-        trx.busy = true;
-        let lock = self
-            .locks
-            .entry(key.to_vec())
-            .or_insert(Lock::new())
-            .clone();
+    pub async fn put(&self, trx_id: usize, key: &[u8], value: &[u8]) {
+        let mut db = self.0.lock().await;
+        let trx = db.trxs.get(&trx_id).unwrap().clone();
+        let mut trx = trx.try_lock().unwrap();
+        let lock = db.locks.entry(key.to_vec()).or_insert(Lock::new()).clone();
+        trx.locks.push(lock.clone());
+
+        drop(db);
         lock.lock_write(trx_id).await.unwrap();
-        trx.locks.push(lock);
 
         trx.write_set.insert(key.to_vec(), Some(value.to_vec()));
-        trx.busy = false;
+        drop(trx);
     }
 
-    pub async fn delete(&mut self, trx_id: usize, key: &[u8]) {
-        let trx = self.trxs.get_mut(&trx_id).unwrap();
-        if trx.busy {
-            panic!("trx is busy");
-        }
-        trx.busy = true;
-        let lock = self
-            .locks
-            .entry(key.to_vec())
-            .or_insert(Lock::new())
-            .clone();
+    pub async fn delete(&self, trx_id: usize, key: &[u8]) {
+        let mut db = self.0.lock().await;
+        let trx = db.trxs.get(&trx_id).unwrap().clone();
+        let mut trx = trx.try_lock().unwrap();
+        let lock = db.locks.entry(key.to_vec()).or_insert(Lock::new()).clone();
+        trx.locks.push(lock.clone());
+
+        drop(db);
         lock.lock_write(trx_id).await.unwrap();
-        trx.locks.push(lock);
 
         trx.write_set.insert(key.to_vec(), None);
-        trx.busy = false;
+        drop(trx);
     }
 
-    pub async fn commit(&mut self, trx_id: usize) -> anyhow::Result<()> {
-        let trx = self.trxs.get_mut(&trx_id).unwrap();
-        if trx.busy {
-            panic!("trx is busy");
-        }
-        trx.busy = true;
+    pub async fn commit(&self, trx_id: usize) -> anyhow::Result<()> {
+        let mut db = self.0.lock().await;
+        let trx = db.trxs.get(&trx_id).unwrap().clone();
+        let mut trx = trx.try_lock().unwrap();
 
         let write_set = &trx.write_set;
-        apply_write_set(&mut self.values, write_set);
+        apply_write_set(&mut db.values, write_set);
         let write_set_bytes =
             bincode::serialize(write_set).context("failed to serialize write set")?;
-        let mut logs_file_writer = BufWriter::new(&self.logs_file);
+        let mut logs_file_writer = BufWriter::new(&db.logs_file);
         atomic_append::append(&mut logs_file_writer, write_set_bytes.as_slice())?;
         drop(logs_file_writer);
-        self.logs_file
-            .sync_all()
-            .context("failed to sync log file")?;
-        self.logs_len += 1;
+        db.logs_file.sync_all().context("failed to sync log file")?;
+        db.logs_len += 1;
         trx.write_set = BTreeMap::new();
         for lock in trx.locks.iter() {
             lock.unlock(trx_id).await.unwrap();
         }
-        trx.busy = false;
+        drop(trx);
         Ok(())
     }
 
-    pub async fn abort(&mut self, trx_id: usize) {
-        let trx = self.trxs.get_mut(&trx_id).unwrap();
-        if trx.busy {
-            panic!("trx is busy");
-        }
-        trx.busy = true;
+    pub async fn abort(&self, trx_id: usize) {
+        let db = self.0.lock().await;
+        let trx = db.trxs.get(&trx_id).unwrap().clone();
+        let mut trx = trx.try_lock().unwrap();
 
         trx.write_set = BTreeMap::new();
         for lock in trx.locks.iter() {
             lock.unlock(trx_id).await.unwrap();
         }
-        trx.busy = false;
+        drop(trx);
     }
 
-    pub fn snapshot(&mut self) -> anyhow::Result<()> {
+    pub async fn snapshot(&self) -> anyhow::Result<()> {
+        let mut db = self.0.lock().await;
+
         let data_tmp_file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open(&self.data_dir.join("data.tmp"))
+            .open(&db.data_dir.join("data.tmp"))
             .context("failed to open data.tmp file")?;
 
         let mut data_tmp_file_writer = BufWriter::new(&data_tmp_file);
-        bincode::serialize_into(&mut data_tmp_file_writer, &self.values)
+        bincode::serialize_into(&mut data_tmp_file_writer, &db.values)
             .context("failed to serialize data")?;
         data_tmp_file_writer
             .flush()
             .context("failed to flush data")?;
         data_tmp_file.sync_all().context("failed to sync data")?;
-        std::fs::rename(&self.data_dir.join("data.tmp"), &self.data_dir.join("data"))
+        std::fs::rename(&db.data_dir.join("data.tmp"), &db.data_dir.join("data"))
             .context("failed to rename data.tmp to data")?;
-        self.logs_file
+        db.logs_file
             .set_len(0)
             .context("failed to truncate logs file")?;
-        self.logs_len = 0;
+        db.logs_len = 0;
         Ok(())
     }
 
-    pub fn new_trx(&mut self) -> usize {
-        let trx_id = self.trx_count;
-        self.trx_count += 1;
-        self.trxs.insert(
+    pub async fn new_trx(&self) -> usize {
+        let mut db = self.0.lock().await;
+
+        let trx_id = db.trx_count;
+        db.trx_count += 1;
+        db.trxs.insert(
             trx_id,
-            Trx {
+            Arc::new(Mutex::new(Trx {
                 write_set: BTreeMap::new(),
-                busy: false,
                 locks: Vec::new(),
-            },
+            })),
         );
         trx_id
     }
 
-    pub fn delete_trx(&mut self, trx_id: usize) {
-        let trx = self.trxs.get_mut(&trx_id).unwrap();
-        if trx.busy {
-            panic!("trx is busy");
-        }
+    pub async fn delete_trx(&self, trx_id: usize) {
+        let mut db = self.0.lock().await;
+        let trx = db.trxs.get(&trx_id).unwrap().clone();
+        let trx = trx.try_lock().unwrap();
 
-        self.trxs.remove(&trx_id);
+        db.trxs.remove(&trx_id);
+        drop(trx);
     }
 }
 

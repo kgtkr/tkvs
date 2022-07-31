@@ -49,9 +49,8 @@ impl Lock {
     }
 
     pub async fn lock_read(&self, id: usize) -> anyhow::Result<()> {
-        let mut lock_guard = self.0.lock().await;
-        let lock = &mut *lock_guard;
-        match lock {
+        let mut lock = self.0.lock().await;
+        match &mut *lock {
             LockState::Unlocked => {
                 *lock = LockState::Locked(
                     CurrentLock::Read({
@@ -76,7 +75,7 @@ impl Lock {
                             map
                         }));
                     }
-                    drop(lock_guard);
+                    drop(lock);
                     rx.await?;
                 }
             },
@@ -85,10 +84,9 @@ impl Lock {
     }
 
     pub async fn lock_write(&self, id: usize) -> anyhow::Result<()> {
-        let mut lock_guard = self.0.lock().await;
-        let lock = &mut *lock_guard;
+        let mut lock = self.0.lock().await;
 
-        match lock {
+        match &mut *lock {
             LockState::Unlocked => {
                 *lock = LockState::Locked(CurrentLock::Write(id), VecDeque::new());
             }
@@ -107,7 +105,7 @@ impl Lock {
                 _ => {
                     let (tx, rx) = oneshot::channel();
                     waiters.push_back(LockWaiter::Write(id, tx));
-                    drop(lock_guard);
+                    drop(lock);
                     rx.await?;
                 }
             },
@@ -116,10 +114,9 @@ impl Lock {
     }
 
     pub async fn unlock(&self, id: usize) -> anyhow::Result<()> {
-        let mut lock_guard = self.0.lock().await;
-        let lock = &mut *lock_guard;
+        let mut lock = self.0.lock().await;
 
-        match lock {
+        match &mut *lock {
             LockState::Unlocked => anyhow::bail!("unlock called on unlocked lock"),
             LockState::Locked(current_lock, waiters) => match current_lock {
                 CurrentLock::Read(cur_ids) if cur_ids.contains(&id) => {
