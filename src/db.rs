@@ -10,7 +10,9 @@ use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::oneshot;
+use tokio::sync::Mutex;
 
 type Key = Vec<u8>;
 type Value = Vec<u8>;
@@ -56,20 +58,25 @@ enum CurrentLock {
     Write(usize),
 }
 
-enum Lock {
+enum LockState {
     Unlocked,
     Locked(CurrentLock, VecDeque<LockWaiter>),
 }
 
+#[derive(Clone)]
+struct Lock(Arc<Mutex<LockState>>);
+
 impl Lock {
     fn new() -> Self {
-        Lock::Unlocked
+        Lock(Arc::new(Mutex::new(LockState::Unlocked)))
     }
 
-    async fn lock_read(&mut self, id: usize) -> anyhow::Result<()> {
-        match self {
-            Lock::Unlocked => {
-                *self = Lock::Locked(
+    async fn lock_read(&self, id: usize) -> anyhow::Result<()> {
+        let mut lock_guard = self.0.lock().await;
+        let lock = &mut *lock_guard;
+        match lock {
+            LockState::Unlocked => {
+                *lock = LockState::Locked(
                     CurrentLock::Read({
                         let mut set = HashSet::new();
                         set.insert(id);
@@ -78,7 +85,7 @@ impl Lock {
                     VecDeque::new(),
                 );
             }
-            Lock::Locked(current_lock, waiters) => match current_lock {
+            LockState::Locked(current_lock, waiters) => match current_lock {
                 CurrentLock::Read(cur_ids) if cur_ids.contains(&id) => {}
                 CurrentLock::Write(cur_id) if cur_id == &id => {}
                 _ => {
@@ -92,6 +99,7 @@ impl Lock {
                             map
                         }));
                     }
+                    drop(lock_guard);
                     rx.await?;
                 }
             },
@@ -99,12 +107,15 @@ impl Lock {
         Ok(())
     }
 
-    async fn lock_write(&mut self, id: usize) -> anyhow::Result<()> {
-        match self {
-            Lock::Unlocked => {
-                *self = Lock::Locked(CurrentLock::Write(id), VecDeque::new());
+    async fn lock_write(&self, id: usize) -> anyhow::Result<()> {
+        let mut lock_guard = self.0.lock().await;
+        let lock = &mut *lock_guard;
+
+        match lock {
+            LockState::Unlocked => {
+                *lock = LockState::Locked(CurrentLock::Write(id), VecDeque::new());
             }
-            Lock::Locked(current_lock, waiters) => match current_lock {
+            LockState::Locked(current_lock, waiters) => match current_lock {
                 CurrentLock::Read(cur_ids)
                     if cur_ids
                         == &({
@@ -119,6 +130,7 @@ impl Lock {
                 _ => {
                     let (tx, rx) = oneshot::channel();
                     waiters.push_back(LockWaiter::Write(id, tx));
+                    drop(lock_guard);
                     rx.await?;
                 }
             },
@@ -126,10 +138,13 @@ impl Lock {
         Ok(())
     }
 
-    fn unlock(&mut self, id: usize) -> anyhow::Result<()> {
-        match self {
-            Lock::Unlocked => anyhow::bail!("unlock called on unlocked lock"),
-            Lock::Locked(current_lock, waiters) => match current_lock {
+    async fn unlock(&self, id: usize) -> anyhow::Result<()> {
+        let mut lock_guard = self.0.lock().await;
+        let lock = &mut *lock_guard;
+
+        match lock {
+            LockState::Unlocked => anyhow::bail!("unlock called on unlocked lock"),
+            LockState::Locked(current_lock, waiters) => match current_lock {
                 CurrentLock::Read(cur_ids) if cur_ids.contains(&id) => {
                     cur_ids.remove(&id);
                     if cur_ids.is_empty() {
@@ -138,7 +153,7 @@ impl Lock {
                                 *current_lock = head.unlock()?;
                             }
                             None => {
-                                *self = Lock::Unlocked;
+                                *lock = LockState::Unlocked;
                             }
                         }
                     }
@@ -148,7 +163,7 @@ impl Lock {
                         *current_lock = head.unlock()?;
                     }
                     None => {
-                        *self = Lock::Unlocked;
+                        *lock = LockState::Unlocked;
                     }
                 },
                 _ => anyhow::bail!("unlock called on locked lock"),
@@ -171,6 +186,7 @@ pub struct DB {
 struct Trx {
     write_set: DataBaseWriteSet,
     busy: bool,
+    locks: Vec<Lock>,
 }
 
 impl DB {
@@ -243,12 +259,13 @@ impl DB {
             panic!("trx is busy");
         }
         trx.busy = true;
-        self.locks
+        let lock = self
+            .locks
             .entry(key.to_vec())
-            .or_insert(Lock::Unlocked)
-            .lock_read(trx_id)
-            .await
-            .unwrap();
+            .or_insert(Lock::new())
+            .clone();
+        lock.lock_read(trx_id).await.unwrap();
+        trx.locks.push(lock);
 
         let result = trx
             .write_set
@@ -266,12 +283,13 @@ impl DB {
             panic!("trx is busy");
         }
         trx.busy = true;
-        self.locks
+        let lock = self
+            .locks
             .entry(key.to_vec())
-            .or_insert(Lock::Unlocked)
-            .lock_write(trx_id)
-            .await
-            .unwrap();
+            .or_insert(Lock::new())
+            .clone();
+        lock.lock_write(trx_id).await.unwrap();
+        trx.locks.push(lock);
 
         trx.write_set.insert(key.to_vec(), Some(value.to_vec()));
         trx.busy = false;
@@ -282,12 +300,14 @@ impl DB {
         if trx.busy {
             panic!("trx is busy");
         }
-        self.locks
+        trx.busy = true;
+        let lock = self
+            .locks
             .entry(key.to_vec())
-            .or_insert(Lock::Unlocked)
-            .lock_write(trx_id)
-            .await
-            .unwrap();
+            .or_insert(Lock::new())
+            .clone();
+        lock.lock_write(trx_id).await.unwrap();
+        trx.locks.push(lock);
 
         trx.write_set.insert(key.to_vec(), None);
         trx.busy = false;
@@ -312,6 +332,10 @@ impl DB {
             .context("failed to sync log file")?;
         self.logs_len += 1;
         trx.write_set = BTreeMap::new();
+        for lock in trx.locks.iter() {
+            lock.unlock(trx_id).await.unwrap();
+        }
+        trx.busy = false;
         Ok(())
     }
 
@@ -320,8 +344,13 @@ impl DB {
         if trx.busy {
             panic!("trx is busy");
         }
+        trx.busy = true;
 
         trx.write_set = BTreeMap::new();
+        for lock in trx.locks.iter() {
+            lock.unlock(trx_id).await.unwrap();
+        }
+        trx.busy = false;
     }
 
     pub fn snapshot(&mut self) -> anyhow::Result<()> {
@@ -356,6 +385,7 @@ impl DB {
             Trx {
                 write_set: BTreeMap::new(),
                 busy: false,
+                locks: Vec::new(),
             },
         );
         trx_id
