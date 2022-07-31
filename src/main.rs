@@ -1,6 +1,5 @@
 use std::io::Write;
 use tkvs::DB;
-use tokio::task;
 
 #[tokio::main]
 async fn main() {
@@ -8,7 +7,7 @@ async fn main() {
     let mut trx_id = db.new_trx().await;
 
     loop {
-        print!("trx:{}> ", trx_id);
+        println!("trx:{}> ", trx_id);
         std::io::stdout().flush().unwrap();
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).unwrap();

@@ -45,7 +45,7 @@ pub struct DB(Arc<Mutex<DBInner>>);
 
 struct Trx {
     write_set: DataBaseWriteSet,
-    locks: Vec<Lock>,
+    locks: HashMap<Key, Lock>,
 }
 
 impl DB {
@@ -118,7 +118,7 @@ impl DB {
         let mut trx = trx.try_lock().unwrap();
 
         let lock = db.locks.entry(key.to_vec()).or_insert(Lock::new()).clone();
-        trx.locks.push(lock.clone());
+        trx.locks.insert(key.to_vec(), lock.clone());
 
         drop(db);
         lock.lock_read(trx_id).await.unwrap();
@@ -140,7 +140,7 @@ impl DB {
         let trx = db.trxs.get(&trx_id).unwrap().clone();
         let mut trx = trx.try_lock().unwrap();
         let lock = db.locks.entry(key.to_vec()).or_insert(Lock::new()).clone();
-        trx.locks.push(lock.clone());
+        trx.locks.insert(key.to_vec(), lock.clone());
 
         drop(db);
         lock.lock_write(trx_id).await.unwrap();
@@ -154,7 +154,7 @@ impl DB {
         let trx = db.trxs.get(&trx_id).unwrap().clone();
         let mut trx = trx.try_lock().unwrap();
         let lock = db.locks.entry(key.to_vec()).or_insert(Lock::new()).clone();
-        trx.locks.push(lock.clone());
+        trx.locks.insert(key.to_vec(), lock.clone());
 
         drop(db);
         lock.lock_write(trx_id).await.unwrap();
@@ -178,7 +178,7 @@ impl DB {
         db.logs_file.sync_all().context("failed to sync log file")?;
         db.logs_len += 1;
         trx.write_set = BTreeMap::new();
-        for lock in trx.locks.iter() {
+        for (_, lock) in trx.locks.iter() {
             lock.unlock(trx_id).await.unwrap();
         }
         drop(trx);
@@ -191,7 +191,7 @@ impl DB {
         let mut trx = trx.try_lock().unwrap();
 
         trx.write_set = BTreeMap::new();
-        for lock in trx.locks.iter() {
+        for (_, lock) in trx.locks.iter() {
             lock.unlock(trx_id).await.unwrap();
         }
         drop(trx);
@@ -232,7 +232,7 @@ impl DB {
             trx_id,
             Arc::new(Mutex::new(Trx {
                 write_set: BTreeMap::new(),
-                locks: Vec::new(),
+                locks: HashMap::new(),
             })),
         );
         trx_id
