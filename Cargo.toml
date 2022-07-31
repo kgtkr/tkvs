@@ -11,3 +11,4 @@ bincode = "1.3.3"
 rand = "0.8.5"
 rust-crypto = "0.2.36"
 serde = {version = "1.0.140", features = ["derive"]}
+thiserror = "1.0.31"

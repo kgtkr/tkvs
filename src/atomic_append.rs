@@ -11,7 +11,7 @@ sha256,データの長さ(u32, little endian),データ
 const HASH_LEN: usize = 32;
 const LEN_SIZE: usize = 4;
 
-pub fn append(writer: &mut impl Write, value: &[u8]) -> std::io::Result<()> {
+pub fn append(writer: &mut impl Write, value: &[u8]) -> anyhow::Result<()> {
     let mut hasher = Sha256::new();
     hasher.input(value);
     let mut hash = [0; HASH_LEN];
@@ -23,43 +23,67 @@ pub fn append(writer: &mut impl Write, value: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn read(reader: &mut impl Read) -> std::io::Result<Option<(Vec<u8>, usize)>> {
+#[derive(thiserror::Error, Debug)]
+pub enum ReadError {
+    #[error("hash mismatch")]
+    HashMismatch,
+    #[error("unexpected eof")]
+    UnexpectedEof,
+}
+
+pub fn read(reader: &mut impl Read) -> anyhow::Result<(Vec<u8>, usize)> {
+    fn convert_read_exact_error(err: std::io::Error) -> anyhow::Error {
+        if err.kind() == std::io::ErrorKind::UnexpectedEof {
+            ReadError::UnexpectedEof.into()
+        } else {
+            err.into()
+        }
+    }
+
     let mut hash = [0; HASH_LEN];
-    if reader.read(&mut hash)? != HASH_LEN {
-        return Ok(None);
-    }
+    reader
+        .read_exact(&mut hash)
+        .map_err(convert_read_exact_error)?;
     let mut len_buf = [0; LEN_SIZE];
-    if reader.read(&mut len_buf)? != LEN_SIZE {
-        return Ok(None);
-    }
+    reader
+        .read_exact(&mut len_buf)
+        .map_err(convert_read_exact_error)?;
 
     let len = u32::from_le_bytes(len_buf);
     // TODO: データが壊れていてlenが大きすぎる場合にoomする危険がある
     let mut value = vec![0; len as usize];
 
-    if reader.read(&mut value)? != len as usize {
-        return Ok(None);
-    }
+    reader
+        .read_exact(&mut value)
+        .map_err(convert_read_exact_error)?;
 
     let mut hasher = Sha256::new();
     let mut expect_hash = [0; HASH_LEN];
     hasher.input(value.as_slice());
     hasher.result(&mut expect_hash);
     if hash != expect_hash {
-        return Ok(None);
+        return Err(ReadError::HashMismatch.into());
     }
-    Ok(Some((value, HASH_LEN + LEN_SIZE + len as usize)))
+    Ok((value, HASH_LEN + LEN_SIZE + len as usize))
 }
 
-pub fn read_all(reader: &mut impl Read) -> std::io::Result<(Vec<Vec<u8>>, usize)> {
+pub fn read_all(reader: &mut impl Read) -> anyhow::Result<(Vec<Vec<u8>>, usize)> {
     let mut records = Vec::new();
     let mut total = 0;
     loop {
-        if let Some((record, size)) = read(reader)? {
-            records.push(record);
-            total += size;
-        } else {
-            return Ok((records, total));
+        match read(reader) {
+            Ok((value, len)) => {
+                records.push(value);
+                total += len;
+            }
+            Err(err) => match err.downcast_ref::<ReadError>() {
+                Some(_) => {
+                    return Ok((records, total));
+                }
+                _ => {
+                    anyhow::bail!("failed to read log: {}", err);
+                }
+            },
         }
     }
 }
