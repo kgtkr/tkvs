@@ -3,8 +3,10 @@ use tkvs::DB;
 
 fn main() {
     let mut db = DB::new(std::env::args().nth(1).unwrap().into()).unwrap();
+    let mut trx_id = db.new_trx();
+
     loop {
-        print!("> ");
+        print!("{} > ", trx_id);
         std::io::stdout().flush().unwrap();
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).unwrap();
@@ -14,29 +16,35 @@ fn main() {
             "put" => {
                 let key = iter.next().unwrap();
                 let value = iter.next().unwrap();
-                db.put(key.as_bytes(), value.as_bytes());
+                db.put(trx_id, key.as_bytes(), value.as_bytes());
             }
             "get" => {
                 let key = iter.next().unwrap();
                 println!(
                     "{}",
-                    db.get(key.as_bytes())
+                    db.get(trx_id, key.as_bytes())
                         .map(|value| String::from_utf8_lossy(&value).to_string())
                         .unwrap_or("<not found>".to_string())
                 );
             }
             "delete" => {
                 let key = iter.next().unwrap();
-                db.delete(key.as_bytes());
+                db.delete(trx_id, key.as_bytes());
             }
             "commit" => {
-                db.commit().unwrap();
+                db.commit(trx_id).unwrap();
             }
             "abort" => {
-                db.abort();
+                db.abort(trx_id);
             }
             "snapshot" => {
                 db.snapshot().unwrap();
+            }
+            "new-trx" => {
+                trx_id = db.new_trx();
+            }
+            "sw-trx" => {
+                trx_id = iter.next().unwrap().parse().unwrap();
             }
             _ => println!("unknown command: {}", cmd),
         }
