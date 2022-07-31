@@ -1,10 +1,12 @@
 use std::io::Write;
 use tkvs::DB;
+use tokio::task;
 
 #[tokio::main]
 async fn main() {
     let mut db = DB::new(std::env::args().nth(1).unwrap().into()).unwrap();
     let mut trx_id = db.new_trx();
+    let local = task::LocalSet::new();
 
     loop {
         print!("trx:{}> ", trx_id);

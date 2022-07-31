@@ -2,12 +2,15 @@ use super::atomic_append;
 use anyhow::Context;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::PathBuf;
+use tokio::sync::oneshot;
 
 type Key = Vec<u8>;
 type Value = Vec<u8>;
@@ -24,6 +27,137 @@ fn apply_write_set(values: &mut DataBaseValues, write_set: &DataBaseWriteSet) {
     }
 }
 
+enum LockWaiter {
+    Read(HashMap<usize, oneshot::Sender<()>>),
+    Write(usize, oneshot::Sender<()>),
+}
+
+impl LockWaiter {
+    fn unlock(self) -> anyhow::Result<CurrentLock> {
+        match self {
+            LockWaiter::Read(map) => {
+                let mut ids = HashSet::new();
+                for (id, sender) in map.into_iter() {
+                    sender.send(()).map_err(|_| anyhow::anyhow!("send error"))?;
+                    ids.insert(id);
+                }
+                Ok(CurrentLock::Read(ids))
+            }
+            LockWaiter::Write(id, sender) => {
+                sender.send(()).map_err(|_| anyhow::anyhow!("send error"))?;
+                Ok(CurrentLock::Write(id))
+            }
+        }
+    }
+}
+
+enum CurrentLock {
+    Read(HashSet<usize>),
+    Write(usize),
+}
+
+enum Lock {
+    Unlocked,
+    Locked(CurrentLock, VecDeque<LockWaiter>),
+}
+
+impl Lock {
+    fn new() -> Self {
+        Lock::Unlocked
+    }
+
+    async fn lock_read(&mut self, id: usize) -> anyhow::Result<()> {
+        match self {
+            Lock::Unlocked => {
+                *self = Lock::Locked(
+                    CurrentLock::Read({
+                        let mut set = HashSet::new();
+                        set.insert(id);
+                        set
+                    }),
+                    VecDeque::new(),
+                );
+            }
+            Lock::Locked(current_lock, waiters) => match current_lock {
+                CurrentLock::Read(cur_ids) if cur_ids.contains(&id) => {}
+                CurrentLock::Write(cur_id) if cur_id == &id => {}
+                _ => {
+                    let (tx, rx) = oneshot::channel();
+                    if let Some(LockWaiter::Read(read_waiters)) = waiters.back_mut() {
+                        read_waiters.insert(id, tx);
+                    } else {
+                        waiters.push_back(LockWaiter::Read({
+                            let mut map = HashMap::new();
+                            map.insert(id, tx);
+                            map
+                        }));
+                    }
+                    rx.await?;
+                }
+            },
+        }
+        Ok(())
+    }
+
+    async fn lock_write(&mut self, id: usize) -> anyhow::Result<()> {
+        match self {
+            Lock::Unlocked => {
+                *self = Lock::Locked(CurrentLock::Write(id), VecDeque::new());
+            }
+            Lock::Locked(current_lock, waiters) => match current_lock {
+                CurrentLock::Read(cur_ids)
+                    if cur_ids
+                        == &({
+                            let mut set = HashSet::new();
+                            set.insert(id);
+                            set
+                        }) =>
+                {
+                    *current_lock = CurrentLock::Write(id);
+                }
+                CurrentLock::Write(cur_id) if cur_id == &id => {}
+                _ => {
+                    let (tx, rx) = oneshot::channel();
+                    waiters.push_back(LockWaiter::Write(id, tx));
+                    rx.await?;
+                }
+            },
+        }
+        Ok(())
+    }
+
+    fn unlock(&mut self, id: usize) -> anyhow::Result<()> {
+        match self {
+            Lock::Unlocked => anyhow::bail!("unlock called on unlocked lock"),
+            Lock::Locked(current_lock, waiters) => match current_lock {
+                CurrentLock::Read(cur_ids) if cur_ids.contains(&id) => {
+                    cur_ids.remove(&id);
+                    if cur_ids.is_empty() {
+                        match waiters.pop_front() {
+                            Some(head) => {
+                                *current_lock = head.unlock()?;
+                            }
+                            None => {
+                                *self = Lock::Unlocked;
+                            }
+                        }
+                    }
+                }
+                CurrentLock::Write(cur_id) if cur_id == &id => match waiters.pop_front() {
+                    Some(head) => {
+                        *current_lock = head.unlock()?;
+                    }
+                    None => {
+                        *self = Lock::Unlocked;
+                    }
+                },
+                _ => anyhow::bail!("unlock called on locked lock"),
+            },
+        }
+        Ok(())
+    }
+}
+
 pub struct DB {
     data_dir: PathBuf,
     values: DataBaseValues,
@@ -31,10 +165,12 @@ pub struct DB {
     logs_file: File,
     trx_count: usize,
     trxs: HashMap<usize, Trx>,
+    locks: HashMap<Key, Lock>,
 }
 
 struct Trx {
     write_set: DataBaseWriteSet,
+    busy: bool,
 }
 
 impl DB {
@@ -97,32 +233,72 @@ impl DB {
             logs_file,
             trx_count: 0,
             trxs: HashMap::new(),
+            locks: HashMap::new(),
         })
     }
 
     pub async fn get(&mut self, trx_id: usize, key: &[u8]) -> Option<Vec<u8>> {
-        let trx = self.trxs.get(&trx_id).unwrap();
+        let trx = self.trxs.get_mut(&trx_id).unwrap();
+        if trx.busy {
+            panic!("trx is busy");
+        }
+        trx.busy = true;
+        self.locks
+            .entry(key.to_vec())
+            .or_insert(Lock::Unlocked)
+            .lock_read(trx_id)
+            .await
+            .unwrap();
 
-        trx.write_set
+        let result = trx
+            .write_set
             .get(key)
             .map(|x| x.clone())
-            .unwrap_or_else(|| self.values.get(key).cloned())
+            .unwrap_or_else(|| self.values.get(key).cloned());
+
+        trx.busy = false;
+        result
     }
 
     pub async fn put(&mut self, trx_id: usize, key: &[u8], value: &[u8]) {
         let trx = self.trxs.get_mut(&trx_id).unwrap();
+        if trx.busy {
+            panic!("trx is busy");
+        }
+        trx.busy = true;
+        self.locks
+            .entry(key.to_vec())
+            .or_insert(Lock::Unlocked)
+            .lock_write(trx_id)
+            .await
+            .unwrap();
 
         trx.write_set.insert(key.to_vec(), Some(value.to_vec()));
+        trx.busy = false;
     }
 
     pub async fn delete(&mut self, trx_id: usize, key: &[u8]) {
         let trx = self.trxs.get_mut(&trx_id).unwrap();
+        if trx.busy {
+            panic!("trx is busy");
+        }
+        self.locks
+            .entry(key.to_vec())
+            .or_insert(Lock::Unlocked)
+            .lock_write(trx_id)
+            .await
+            .unwrap();
 
         trx.write_set.insert(key.to_vec(), None);
+        trx.busy = false;
     }
 
     pub async fn commit(&mut self, trx_id: usize) -> anyhow::Result<()> {
         let trx = self.trxs.get_mut(&trx_id).unwrap();
+        if trx.busy {
+            panic!("trx is busy");
+        }
+        trx.busy = true;
 
         let write_set = &trx.write_set;
         apply_write_set(&mut self.values, write_set);
@@ -141,6 +317,9 @@ impl DB {
 
     pub async fn abort(&mut self, trx_id: usize) {
         let trx = self.trxs.get_mut(&trx_id).unwrap();
+        if trx.busy {
+            panic!("trx is busy");
+        }
 
         trx.write_set = BTreeMap::new();
     }
@@ -176,12 +355,18 @@ impl DB {
             trx_id,
             Trx {
                 write_set: BTreeMap::new(),
+                busy: false,
             },
         );
         trx_id
     }
 
     pub fn delete_trx(&mut self, trx_id: usize) {
+        let trx = self.trxs.get_mut(&trx_id).unwrap();
+        if trx.busy {
+            panic!("trx is busy");
+        }
+
         self.trxs.remove(&trx_id);
     }
 }
