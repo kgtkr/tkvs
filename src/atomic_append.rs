@@ -22,7 +22,7 @@ pub fn append(writer: &mut impl Write, value: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn read(reader: &mut impl Read) -> std::io::Result<Option<Vec<u8>>> {
+pub fn read(reader: &mut impl Read) -> std::io::Result<Option<(Vec<u8>, usize)>> {
     let mut hash = [0; HASH_LEN];
     if reader.read(&mut hash)? != HASH_LEN {
         return Ok(None);
@@ -47,16 +47,18 @@ pub fn read(reader: &mut impl Read) -> std::io::Result<Option<Vec<u8>>> {
     if hash != expect_hash {
         return Ok(None);
     }
-    Ok(Some(value))
+    Ok(Some((value, HASH_LEN + LEN_SIZE + len as usize)))
 }
 
-pub fn read_all(reader: &mut impl Read) -> std::io::Result<Vec<Vec<u8>>> {
+pub fn read_all(reader: &mut impl Read) -> std::io::Result<(Vec<Vec<u8>>, usize)> {
     let mut records = Vec::new();
+    let mut total = 0;
     loop {
-        if let Some(record) = read(reader)? {
+        if let Some((record, size)) = read(reader)? {
             records.push(record);
+            total += size;
         } else {
-            return Ok(records);
+            return Ok((records, total));
         }
     }
 }

@@ -1,6 +1,5 @@
 use super::atomic_append;
 use anyhow::Context;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -48,28 +47,26 @@ impl DB {
             }
         };
 
+        let logs_file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&data_dir.join("logs"))
+            .context("failed to open log file")?;
+
         let write_sets = {
-            match File::open(data_dir.join("logs")) {
-                Ok(logs_file) => {
-                    let mut logs_file_reader = BufReader::new(&logs_file);
-                    atomic_append::read_all(&mut logs_file_reader)
-                        .context("failed to read logs file")?
-                        .into_iter()
-                        .map(|log| {
-                            bincode::deserialize(log.as_slice())
-                                .context("failed to deserialize log")
-                        })
-                        .collect::<Result<Vec<_>, _>>()
-                        .context("failed to deserialize logs")?
-                }
-                Err(err) => {
-                    if err.kind() == std::io::ErrorKind::NotFound {
-                        Vec::new()
-                    } else {
-                        anyhow::bail!("failed to open logs file: {}", err);
-                    }
-                }
-            }
+            let mut logs_file_reader = BufReader::new(&logs_file);
+            let (records, total) = atomic_append::read_all(&mut logs_file_reader)
+                .context("failed to read logs file")?;
+            logs_file.set_len(total as u64)?;
+
+            records
+                .into_iter()
+                .map(|log| {
+                    bincode::deserialize(log.as_slice()).context("failed to deserialize log")
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .context("failed to deserialize logs")?
         };
 
         let logs_len = write_sets.len();
