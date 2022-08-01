@@ -5,8 +5,8 @@ use std::collections::VecDeque;
 use anyhow::Context;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::sync::oneshot;
-use tokio::sync::Mutex;
 
 enum LockWaiter {
     Read(HashMap<usize, oneshot::Sender<()>>),
@@ -54,7 +54,7 @@ impl Lock {
         &self,
         id: usize,
     ) -> anyhow::Result<Option<impl Future<Output = anyhow::Result<()>>>> {
-        let mut lock = self.0.lock().await;
+        let mut lock = self.0.lock().unwrap();
         match &mut *lock {
             LockState::Unlocked => {
                 *lock = LockState::Locked(
@@ -96,7 +96,7 @@ impl Lock {
         &self,
         id: usize,
     ) -> anyhow::Result<Option<impl Future<Output = anyhow::Result<()>>>> {
-        let mut lock = self.0.lock().await;
+        let mut lock = self.0.lock().unwrap();
 
         match &mut *lock {
             LockState::Unlocked => {
@@ -126,7 +126,7 @@ impl Lock {
     }
 
     pub async fn unlock(&self, id: usize) -> anyhow::Result<()> {
-        let mut lock = self.0.lock().await;
+        let mut lock = self.0.lock().unwrap();
 
         match &mut *lock {
             LockState::Unlocked => anyhow::bail!("unlock called on unlocked lock"),
@@ -159,7 +159,7 @@ impl Lock {
     }
 
     pub async fn current_ids(&self) -> HashSet<usize> {
-        let lock = self.0.lock().await;
+        let lock = self.0.lock().unwrap();
         match &*lock {
             LockState::Unlocked => HashSet::new(),
             LockState::Locked(current_lock, _) => match current_lock {
@@ -174,7 +174,7 @@ impl Lock {
     }
 
     pub async fn wait_ids(&self) -> HashSet<usize> {
-        let lock = self.0.lock().await;
+        let lock = self.0.lock().unwrap();
         match &*lock {
             LockState::Unlocked => HashSet::new(),
             LockState::Locked(_, waiters) => {
