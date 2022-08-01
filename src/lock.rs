@@ -125,7 +125,7 @@ impl Lock {
         Ok(None)
     }
 
-    pub async fn unlock(&self, id: usize) -> anyhow::Result<()> {
+    pub fn unlock(&self, id: usize) -> anyhow::Result<()> {
         let mut lock = self.0.lock().unwrap();
 
         match &mut *lock {
@@ -158,7 +158,7 @@ impl Lock {
         Ok(())
     }
 
-    pub async fn current_ids(&self) -> HashSet<usize> {
+    pub fn current_ids(&self) -> HashSet<usize> {
         let lock = self.0.lock().unwrap();
         match &*lock {
             LockState::Unlocked => HashSet::new(),
@@ -173,7 +173,7 @@ impl Lock {
         }
     }
 
-    pub async fn wait_ids(&self) -> HashSet<usize> {
+    pub fn wait_ids(&self) -> HashSet<usize> {
         let lock = self.0.lock().unwrap();
         match &*lock {
             LockState::Unlocked => HashSet::new(),

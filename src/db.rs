@@ -126,8 +126,8 @@ impl DB {
                     graph.insert(id, HashSet::new());
                 }
                 for (_, lock) in &db.locks {
-                    let tos = lock.current_ids().await;
-                    let froms = lock.wait_ids().await;
+                    let tos = lock.current_ids();
+                    let froms = lock.wait_ids();
                     for &to in &tos {
                         for &from in &froms {
                             graph.get_mut(&from).unwrap().insert(to);
@@ -246,7 +246,7 @@ impl DB {
         db.logs_len += 1;
         trx.write_set = BTreeMap::new();
         for (_, lock) in trx.locks.iter() {
-            lock.unlock(trx_id).await.unwrap();
+            lock.unlock(trx_id).unwrap();
         }
         drop(trx);
         Ok(())
@@ -259,7 +259,7 @@ impl DB {
 
         trx.write_set = BTreeMap::new();
         for (_, lock) in trx.locks.iter() {
-            lock.unlock(trx_id).await.unwrap();
+            lock.unlock(trx_id).unwrap();
         }
         drop(trx);
     }
