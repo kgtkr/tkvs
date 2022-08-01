@@ -1,5 +1,5 @@
 use super::atomic_append;
-use super::lock::Lock;
+use super::lock_set::LockSet;
 use anyhow::Context;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ struct DBInner {
     logs_file: File,
     trx_count: usize,
     trxs: HashMap<usize, Arc<Mutex<Trx>>>,
-    locks: HashMap<Key, Lock>,
+    lock_set: LockSet,
 }
 
 #[derive(Clone)]
@@ -46,7 +46,6 @@ pub struct DB(Arc<Mutex<DBInner>>);
 
 struct Trx {
     write_set: DataBaseWriteSet,
-    locks: HashMap<Key, Lock>,
 }
 
 impl DB {
@@ -109,82 +108,18 @@ impl DB {
             logs_file,
             trx_count: 0,
             trxs: HashMap::new(),
-            locks: HashMap::new(),
+            lock_set: LockSet::new(),
         }))))
-    }
-
-    async fn wait_without_deadlock(
-        &self,
-        wait: Option<impl Future<Output = anyhow::Result<()>>>,
-    ) -> anyhow::Result<()> {
-        match wait {
-            Some(wait) => {
-                let db = self.0.lock().await;
-                let all_ids = db.trxs.keys().cloned().collect::<HashSet<_>>();
-                let mut graph = HashMap::new();
-                for id in &all_ids {
-                    graph.insert(id, HashSet::new());
-                }
-                for (_, lock) in &db.locks {
-                    let tos = lock.current_ids();
-                    let froms = lock.wait_ids();
-                    for &to in &tos {
-                        for &from in &froms {
-                            graph.get_mut(&from).unwrap().insert(to);
-                        }
-                    }
-                }
-                drop(db);
-
-                let mut sorted_ids = Vec::new();
-                let mut indegree = HashMap::new();
-                for &id in &all_ids {
-                    indegree.insert(id, 0);
-                }
-                for (_, tos) in graph.iter() {
-                    for to in tos {
-                        *indegree.get_mut(to).unwrap() += 1;
-                    }
-                }
-                let mut queue = VecDeque::new();
-                for (id, indegree) in indegree.iter() {
-                    if *indegree == 0 {
-                        queue.push_back(*id);
-                    }
-                }
-                while let Some(id) = queue.pop_front() {
-                    sorted_ids.push(id);
-                    for &to in graph.get(&id).unwrap() {
-                        *indegree.get_mut(&to).unwrap() -= 1;
-                        if *indegree.get(&to).unwrap() == 0 {
-                            queue.push_back(to);
-                        }
-                    }
-                }
-
-                if sorted_ids.len() != all_ids.len() {
-                    anyhow::bail!("deadlock detected");
-                }
-
-                wait.await?
-            }
-            None => {}
-        }
-        Ok(())
     }
 
     pub async fn get(&self, trx_id: usize, key: &[u8]) -> Option<Vec<u8>> {
         let mut db = self.0.lock().await;
         let trx = db.trxs.get(&trx_id).unwrap().clone();
         let mut trx = trx.try_lock().unwrap();
-
-        let lock = db.locks.entry(key.to_vec()).or_insert(Lock::new()).clone();
-        trx.locks.insert(key.to_vec(), lock.clone());
+        let lock_set = db.lock_set.clone();
 
         drop(db);
-        self.wait_without_deadlock(lock.lock_read(trx_id).await.unwrap())
-            .await
-            .unwrap();
+        lock_set.lock_read(key.to_vec(), trx_id).await;
 
         let db = self.0.lock().await;
 
@@ -202,13 +137,10 @@ impl DB {
         let mut db = self.0.lock().await;
         let trx = db.trxs.get(&trx_id).unwrap().clone();
         let mut trx = trx.try_lock().unwrap();
-        let lock = db.locks.entry(key.to_vec()).or_insert(Lock::new()).clone();
-        trx.locks.insert(key.to_vec(), lock.clone());
+        let lock_set = db.lock_set.clone();
 
         drop(db);
-        self.wait_without_deadlock(lock.lock_write(trx_id).await.unwrap())
-            .await
-            .unwrap();
+        lock_set.lock_write(key.to_vec(), trx_id).await;
 
         trx.write_set.insert(key.to_vec(), Some(value.to_vec()));
         drop(trx);
@@ -218,13 +150,10 @@ impl DB {
         let mut db = self.0.lock().await;
         let trx = db.trxs.get(&trx_id).unwrap().clone();
         let mut trx = trx.try_lock().unwrap();
-        let lock = db.locks.entry(key.to_vec()).or_insert(Lock::new()).clone();
-        trx.locks.insert(key.to_vec(), lock.clone());
+        let lock_set = db.lock_set.clone();
 
         drop(db);
-        self.wait_without_deadlock(lock.lock_write(trx_id).await.unwrap())
-            .await
-            .unwrap();
+        lock_set.lock_write(key.to_vec(), trx_id).await;
 
         trx.write_set.insert(key.to_vec(), None);
         drop(trx);
@@ -234,6 +163,7 @@ impl DB {
         let mut db = self.0.lock().await;
         let trx = db.trxs.get(&trx_id).unwrap().clone();
         let mut trx = trx.try_lock().unwrap();
+        let lock_set = db.lock_set.clone();
 
         let write_set = &trx.write_set;
         apply_write_set(&mut db.values, write_set);
@@ -245,9 +175,7 @@ impl DB {
         db.logs_file.sync_all().context("failed to sync log file")?;
         db.logs_len += 1;
         trx.write_set = BTreeMap::new();
-        for (_, lock) in trx.locks.iter() {
-            lock.unlock(trx_id).unwrap();
-        }
+        lock_set.unlock(trx_id);
         drop(trx);
         Ok(())
     }
@@ -256,11 +184,10 @@ impl DB {
         let db = self.0.lock().await;
         let trx = db.trxs.get(&trx_id).unwrap().clone();
         let mut trx = trx.try_lock().unwrap();
+        let lock_set = db.lock_set.clone();
 
         trx.write_set = BTreeMap::new();
-        for (_, lock) in trx.locks.iter() {
-            lock.unlock(trx_id).unwrap();
-        }
+        lock_set.unlock(trx_id);
         drop(trx);
     }
 
@@ -299,7 +226,6 @@ impl DB {
             trx_id,
             Arc::new(Mutex::new(Trx {
                 write_set: BTreeMap::new(),
-                locks: HashMap::new(),
             })),
         );
         trx_id
