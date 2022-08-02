@@ -35,7 +35,7 @@ async fn main() {
                 let trx = trxs.get(&trx_id).unwrap().clone();
 
                 tokio::spawn(async move {
-                    let trx = trx.try_lock().unwrap();
+                    let mut trx = trx.try_lock().unwrap();
                     let value = trx.get(key.as_bytes()).await;
                     println!(
                         "trx:{} get success: {}",

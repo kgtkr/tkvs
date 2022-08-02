@@ -49,6 +49,7 @@ pub struct Trx {
     lock_set: LockSet,
     id: usize,
     write_set: DataBaseWriteSet,
+    read_set: BTreeMap<Key, Option<Value>>,
 }
 
 impl Drop for Trx {
@@ -58,15 +59,23 @@ impl Drop for Trx {
 }
 
 impl Trx {
-    pub async fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+    pub async fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         self.lock_set.lock_read(key.to_vec(), self.id).await;
-        // TODO: read lockを取得しているのでdbのロックは不要であるはず
-        let db = self.db.0.lock().await;
 
-        self.write_set
+        if let Some(value) = self
+            .write_set
             .get(key)
-            .map(|x| x.clone())
-            .unwrap_or_else(|| db.values.get(key).cloned())
+            .cloned()
+            .or_else(|| self.read_set.get(key).cloned())
+        {
+            value
+        } else {
+            // ロックしている間は値が変わることはないので複数回のdbロックを防ぐために値をキャッシュする
+            let db = self.db.0.lock().await;
+            let value = db.values.get(key).cloned();
+            self.read_set.insert(key.to_vec(), value.clone());
+            value
+        }
     }
 
     pub async fn put(&mut self, key: &[u8], value: &[u8]) {
@@ -202,6 +211,7 @@ impl DB {
         db.trx_count += 1;
         Trx {
             write_set: BTreeMap::new(),
+            read_set: BTreeMap::new(),
             id: trx_id,
             db: self.clone(),
             lock_set: db.lock_set.clone(),
