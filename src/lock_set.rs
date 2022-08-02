@@ -258,26 +258,15 @@ impl LockSet {
             .locks
             .retain(|_, lock| matches!(lock, MaybeLock::Locked(_)));
 
-        let all_ids = lock_set
-            .locks
-            .iter()
-            .fold(HashSet::new(), |mut ids, (_, lock)| {
-                ids.extend(lock.current_lock_ids());
-                ids.extend(lock.wait_ids());
-                ids
-            });
-
         let mut graph = HashMap::new();
-        for id in &all_ids {
-            graph.insert(id, HashSet::new());
-        }
         for lock in lock_set.locks.values() {
             let tos = lock.current_lock_ids();
             let froms = lock.wait_ids();
             for &to in &tos {
+                graph.entry(to).or_insert_with(HashSet::new);
                 for &from in &froms {
                     if from != to {
-                        graph.get_mut(&from).unwrap().insert(to);
+                        graph.entry(from).or_insert_with(HashSet::new).insert(to);
                     }
                 }
             }
@@ -286,7 +275,7 @@ impl LockSet {
 
         let mut sorted_ids = Vec::new();
         let mut indegree = HashMap::new();
-        for &id in &all_ids {
+        for &id in graph.keys() {
             indegree.insert(id, 0);
         }
         for (_, tos) in graph.iter() {
@@ -310,7 +299,7 @@ impl LockSet {
             }
         }
 
-        if sorted_ids.len() != all_ids.len() {
+        if sorted_ids.len() != graph.len() {
             panic!("deadlock detected"); // TODO: handle deadlock
         }
     }
