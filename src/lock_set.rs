@@ -22,8 +22,8 @@ enum CurrentLock {
 struct Lock {
     current_lock: CurrentLock,
     // トランザクションは直列に実行されるため, TrxIdは重複しない
-    writers: VecDeque<(TrxId, oneshot::Sender<()>)>,
-    readers: HashMap<TrxId, oneshot::Sender<()>>,
+    writers: VecDeque<TrxId>,
+    readers: HashSet<TrxId>,
 }
 
 #[derive(Debug)]
@@ -37,7 +37,7 @@ impl MaybeLock {
         MaybeLock::Unlocked
     }
 
-    fn lock_read(&mut self, id: TrxId) -> Option<Receiver<()>> {
+    fn lock_read(&mut self, id: TrxId) -> bool {
         match self {
             MaybeLock::Unlocked => {
                 *self = MaybeLock::Locked(Lock {
@@ -47,9 +47,9 @@ impl MaybeLock {
                         set
                     }),
                     writers: VecDeque::new(),
-                    readers: HashMap::new(),
+                    readers: HashSet::new(),
                 });
-                None
+                false
             }
             MaybeLock::Locked(Lock {
                 current_lock,
@@ -58,27 +58,26 @@ impl MaybeLock {
             }) => match current_lock {
                 CurrentLock::Read(cur_ids) if cur_ids.contains(&id) || writers.is_empty() => {
                     cur_ids.insert(id);
-                    None
+                    false
                 }
-                CurrentLock::Write(cur_id) if cur_id == &id => None,
+                CurrentLock::Write(cur_id) if cur_id == &id => false,
                 _ => {
-                    let (tx, rx) = oneshot::channel();
-                    readers.insert(id, tx);
-                    Some(rx)
+                    readers.insert(id);
+                    true
                 }
             },
         }
     }
 
-    fn lock_write(&mut self, id: usize) -> Option<Receiver<()>> {
+    fn lock_write(&mut self, id: usize) -> bool {
         match self {
             MaybeLock::Unlocked => {
                 *self = MaybeLock::Locked(Lock {
                     current_lock: CurrentLock::Write(id),
                     writers: VecDeque::new(),
-                    readers: HashMap::new(),
+                    readers: HashSet::new(),
                 });
-                None
+                false
             }
             MaybeLock::Locked(Lock {
                 current_lock,
@@ -94,19 +93,18 @@ impl MaybeLock {
                         }) =>
                 {
                     *current_lock = CurrentLock::Write(id);
-                    None
+                    false
                 }
-                CurrentLock::Write(cur_id) if cur_id == &id => None,
+                CurrentLock::Write(cur_id) if cur_id == &id => false,
                 _ => {
-                    let (tx, rx) = oneshot::channel();
-                    writers.push_back((id, tx));
-                    Some(rx)
+                    writers.push_back(id);
+                    true
                 }
             },
         }
     }
 
-    fn unlock(&mut self, id: usize) -> Option<()> {
+    fn unlock(&mut self, id: usize) -> Option<HashSet<TrxId>> {
         match self {
             MaybeLock::Unlocked => None,
             MaybeLock::Locked(Lock {
@@ -117,28 +115,27 @@ impl MaybeLock {
                 CurrentLock::Read(cur_ids) if cur_ids.contains(&id) => {
                     cur_ids.remove(&id);
                     if cur_ids.is_empty() {
-                        self.current_lock_unlock();
+                        Some(self.current_lock_unlock())
                     } else if cur_ids.len() == 1 {
                         let cur_id = *cur_ids.iter().next().unwrap();
-                        if let Some(waiter_idx) = writers.iter().position(|(id, _)| *id == cur_id) {
-                            let (waiter_id, waiter_tx) = writers.remove(waiter_idx).unwrap();
+                        if let Some(waiter_idx) = writers.iter().position(|id| *id == cur_id) {
+                            let waiter_id = writers.remove(waiter_idx).unwrap();
                             *current_lock = CurrentLock::Write(waiter_id);
-                            waiter_tx.send(()).unwrap();
+                            Some(HashSet::from([waiter_id]))
+                        } else {
+                            Some(HashSet::new())
                         }
+                    } else {
+                        Some(HashSet::new())
                     }
-
-                    Some(())
                 }
-                CurrentLock::Write(cur_id) if cur_id == &id => {
-                    self.current_lock_unlock();
-                    Some(())
-                }
+                CurrentLock::Write(cur_id) if cur_id == &id => Some(self.current_lock_unlock()),
                 _ => None,
             },
         }
     }
 
-    fn current_lock_unlock(&mut self) {
+    fn current_lock_unlock(&mut self) -> HashSet<TrxId> {
         match self {
             MaybeLock::Unlocked => unreachable!(),
             MaybeLock::Locked(Lock {
@@ -146,17 +143,15 @@ impl MaybeLock {
                 writers,
                 readers,
             }) => {
-                if let Some((id, tx)) = writers.pop_front() {
+                if let Some(id) = writers.pop_front() {
                     *current_lock = CurrentLock::Write(id);
-                    tx.send(()).unwrap();
+                    HashSet::from([id])
                 } else if !readers.is_empty() {
-                    *current_lock = CurrentLock::Read(readers.keys().cloned().collect());
-                    let txs = readers.drain().map(|(_, tx)| tx).collect::<Vec<_>>();
-                    for tx in txs {
-                        tx.send(()).unwrap();
-                    }
+                    *current_lock = CurrentLock::Read(readers.clone());
+                    readers.drain().collect::<HashSet<_>>()
                 } else {
                     *self = MaybeLock::Unlocked;
+                    HashSet::new()
                 }
             }
         }
@@ -167,11 +162,7 @@ impl MaybeLock {
             MaybeLock::Unlocked => HashSet::new(),
             MaybeLock::Locked(Lock { current_lock, .. }) => match current_lock {
                 CurrentLock::Read(cur_ids) => cur_ids.clone(),
-                CurrentLock::Write(cur_id) => {
-                    let mut set = HashSet::new();
-                    set.insert(*cur_id);
-                    set
-                }
+                CurrentLock::Write(cur_id) => HashSet::from([*cur_id]),
             },
         }
     }
@@ -183,16 +174,11 @@ impl MaybeLock {
                 current_lock: _,
                 writers,
                 readers,
-            }) => {
-                let mut set = HashSet::new();
-                for (id, _) in writers {
-                    set.insert(*id);
-                }
-                for id in readers.keys() {
-                    set.insert(*id);
-                }
-                set
-            }
+            }) => writers
+                .iter()
+                .cloned()
+                .chain(readers.iter().cloned())
+                .collect::<HashSet<_>>(),
         }
     }
 }
@@ -200,6 +186,7 @@ impl MaybeLock {
 #[derive(Debug)]
 struct LockSetState {
     locks: HashMap<RecordKey, MaybeLock>,
+    txs: HashMap<TrxId, oneshot::Sender<()>>,
 }
 
 #[derive(Clone, Debug)]
@@ -209,6 +196,7 @@ impl LockSet {
     pub fn new() -> Self {
         LockSet(Arc::new(Mutex::new(LockSetState {
             locks: HashMap::new(),
+            txs: HashMap::new(),
         })))
     }
 
@@ -216,10 +204,15 @@ impl LockSet {
         let rx = {
             let mut lock_set = self.0.lock().unwrap();
             let lock = lock_set.locks.entry(key).or_insert_with(MaybeLock::new);
-            let rx = lock.lock_read(id);
-            drop(lock_set);
-            self.check_deadlock();
-            rx
+            if lock.lock_read(id) {
+                let (tx, rx) = oneshot::channel();
+                lock_set.txs.insert(id, tx);
+                drop(lock_set);
+                self.check_deadlock();
+                Some(rx)
+            } else {
+                None
+            }
         };
         match rx {
             Some(f) => f.await.unwrap(),
@@ -231,10 +224,15 @@ impl LockSet {
         let rx = {
             let mut lock_set = self.0.lock().unwrap();
             let lock = lock_set.locks.entry(key).or_insert_with(MaybeLock::new);
-            let rx = lock.lock_write(id);
-            drop(lock_set);
-            self.check_deadlock();
-            rx
+            if lock.lock_write(id) {
+                let (tx, rx) = oneshot::channel();
+                lock_set.txs.insert(id, tx);
+                drop(lock_set);
+                self.check_deadlock();
+                Some(rx)
+            } else {
+                None
+            }
         };
         match rx {
             Some(f) => f.await.unwrap(),
@@ -244,12 +242,15 @@ impl LockSet {
 
     pub fn unlock(&self, id: TrxId) {
         let mut lock_set = self.0.lock().unwrap();
+        let lock_set = &mut *lock_set;
         for lock in lock_set.locks.values_mut() {
             if lock.current_lock_ids().contains(&id) {
-                lock.unlock(id).unwrap()
+                let ids = lock.unlock(id).unwrap();
+                for id in ids {
+                    lock_set.txs.remove(&id).unwrap().send(()).unwrap();
+                }
             }
         }
-        drop(lock_set);
     }
 
     fn check_deadlock(&self) {
