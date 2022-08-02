@@ -21,6 +21,7 @@ enum CurrentLock {
 #[derive(Debug)]
 struct Lock {
     current_lock: CurrentLock,
+    // トランザクションは直列に実行されるため, TrxIdは重複しない
     writers: VecDeque<(TrxId, oneshot::Sender<()>)>,
     readers: HashMap<TrxId, oneshot::Sender<()>>,
 }
