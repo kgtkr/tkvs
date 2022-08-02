@@ -11,6 +11,7 @@ struct AppArg {
 }
 
 #[derive(Parser)]
+#[clap(name = "tkvs-repl")]
 struct CmdArg {
     #[clap(subcommand)]
     action: CmdAction,
@@ -60,7 +61,7 @@ async fn main() {
         std::io::stdout().flush().unwrap();
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).unwrap();
-        let arg = CmdArg::try_parse_from(&mut line.split_whitespace());
+        let arg = CmdArg::try_parse_from(&mut std::iter::once("").chain(line.split_whitespace()));
         match arg {
             Ok(arg) => {
                 let db = db.clone();
