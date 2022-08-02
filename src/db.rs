@@ -51,6 +51,12 @@ pub struct Trx {
     write_set: DataBaseWriteSet,
 }
 
+impl Drop for Trx {
+    fn drop(&mut self) {
+        self.lock_set.unlock(self.id);
+    }
+}
+
 impl Trx {
     pub async fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         self.lock_set.lock_read(key.to_vec(), self.id).await;
