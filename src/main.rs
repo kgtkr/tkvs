@@ -1,10 +1,14 @@
-use std::io::Write;
+use std::{collections::HashMap, io::Write, sync::Arc};
 use tkvs::DB;
+use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
     let db = DB::new(std::env::args().nth(1).unwrap().into()).unwrap();
-    let mut trx_id = db.new_trx().await;
+    let mut trxs = HashMap::new();
+    let trx = db.new_trx().await;
+    let mut trx_id = trx.id();
+    trxs.insert(trx_id, Arc::new(Mutex::new(trx)));
 
     loop {
         println!("trx:{}> ", trx_id);
@@ -18,17 +22,21 @@ async fn main() {
             "put" => {
                 let key = iter.next().unwrap().to_string();
                 let value = iter.next().unwrap().to_string();
+                let trx = trxs.get(&trx_id).unwrap().clone();
 
                 tokio::spawn(async move {
-                    db.put(trx_id, key.as_bytes(), value.as_bytes()).await;
+                    let mut trx = trx.try_lock().unwrap();
+                    trx.put(key.as_bytes(), value.as_bytes()).await;
                     println!("trx:{} put success", trx_id);
                 });
             }
             "get" => {
                 let key = iter.next().unwrap().to_string();
+                let trx = trxs.get(&trx_id).unwrap().clone();
 
                 tokio::spawn(async move {
-                    let value = db.get(trx_id, key.as_bytes()).await;
+                    let trx = trx.try_lock().unwrap();
+                    let value = trx.get(key.as_bytes()).await;
                     println!(
                         "trx:{} get success: {}",
                         trx_id,
@@ -40,21 +48,32 @@ async fn main() {
             }
             "delete" => {
                 let key = iter.next().unwrap().to_string();
+                let trx = trxs.get(&trx_id).unwrap().clone();
 
                 tokio::spawn(async move {
-                    db.delete(trx_id, key.as_bytes()).await;
+                    let mut trx = trx.try_lock().unwrap();
+
+                    trx.delete(key.as_bytes()).await;
                     println!("trx:{} delete success", trx_id);
                 });
             }
             "commit" => {
+                let trx = trxs.get(&trx_id).unwrap().clone();
+
                 tokio::spawn(async move {
-                    db.commit(trx_id).await.unwrap();
+                    let mut trx = trx.try_lock().unwrap();
+
+                    trx.commit().await.unwrap();
                     println!("trx:{} commit success", trx_id);
                 });
             }
             "abort" => {
+                let trx = trxs.get(&trx_id).unwrap().clone();
+
                 tokio::spawn(async move {
-                    db.abort(trx_id).await;
+                    let mut trx = trx.try_lock().unwrap();
+
+                    trx.abort().await;
                     println!("trx:{} abort success", trx_id);
                 });
             }
@@ -62,7 +81,9 @@ async fn main() {
                 db.snapshot().await.unwrap();
             }
             "new-trx" => {
-                trx_id = db.new_trx().await;
+                let trx = db.new_trx().await;
+                trx_id = trx.id();
+                trxs.insert(trx_id, Arc::new(Mutex::new(trx)));
             }
             "sw-trx" => {
                 trx_id = iter.next().unwrap().parse().unwrap();

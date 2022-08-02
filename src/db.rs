@@ -13,6 +13,7 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Weak;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 
@@ -37,15 +38,66 @@ struct DBInner {
     logs_len: usize,
     logs_file: File,
     trx_count: usize,
-    trxs: HashMap<usize, Arc<Mutex<Trx>>>,
     lock_set: LockSet,
 }
 
 #[derive(Clone)]
 pub struct DB(Arc<Mutex<DBInner>>);
 
-struct Trx {
+pub struct Trx {
+    db: DB,
+    lock_set: LockSet,
+    id: usize,
     write_set: DataBaseWriteSet,
+}
+
+impl Trx {
+    pub async fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+        self.lock_set.lock_read(key.to_vec(), self.id).await;
+        // TODO: read lockを取得しているのでdbのロックは不要であるはず
+        let db = self.db.0.lock().await;
+
+        self.write_set
+            .get(key)
+            .map(|x| x.clone())
+            .unwrap_or_else(|| db.values.get(key).cloned())
+    }
+
+    pub async fn put(&mut self, key: &[u8], value: &[u8]) {
+        self.lock_set.lock_write(key.to_vec(), self.id).await;
+        self.write_set.insert(key.to_vec(), Some(value.to_vec()));
+    }
+
+    pub async fn delete(&mut self, key: &[u8]) {
+        self.lock_set.lock_write(key.to_vec(), self.id).await;
+        self.write_set.insert(key.to_vec(), None);
+    }
+
+    pub async fn abort(&mut self) {
+        self.write_set = BTreeMap::new();
+        self.lock_set.unlock(self.id);
+    }
+
+    pub async fn commit(&mut self) -> anyhow::Result<()> {
+        let mut db = self.db.0.lock().await;
+
+        let write_set = &self.write_set;
+        apply_write_set(&mut db.values, write_set);
+        let write_set_bytes =
+            bincode::serialize(write_set).context("failed to serialize write set")?;
+        let mut logs_file_writer = BufWriter::new(&db.logs_file);
+        atomic_append::append(&mut logs_file_writer, write_set_bytes.as_slice())?;
+        drop(logs_file_writer);
+        db.logs_file.sync_all().context("failed to sync log file")?;
+        db.logs_len += 1;
+        self.write_set = BTreeMap::new();
+        self.lock_set.unlock(self.id);
+        Ok(())
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
 }
 
 impl DB {
@@ -107,88 +159,8 @@ impl DB {
             logs_len,
             logs_file,
             trx_count: 0,
-            trxs: HashMap::new(),
             lock_set: LockSet::new(),
         }))))
-    }
-
-    pub async fn get(&self, trx_id: usize, key: &[u8]) -> Option<Vec<u8>> {
-        let mut db = self.0.lock().await;
-        let trx = db.trxs.get(&trx_id).unwrap().clone();
-        let mut trx = trx.try_lock().unwrap();
-        let lock_set = db.lock_set.clone();
-
-        drop(db);
-        lock_set.lock_read(key.to_vec(), trx_id).await;
-
-        let db = self.0.lock().await;
-
-        let result = trx
-            .write_set
-            .get(key)
-            .map(|x| x.clone())
-            .unwrap_or_else(|| db.values.get(key).cloned());
-
-        drop(trx);
-        result
-    }
-
-    pub async fn put(&self, trx_id: usize, key: &[u8], value: &[u8]) {
-        let mut db = self.0.lock().await;
-        let trx = db.trxs.get(&trx_id).unwrap().clone();
-        let mut trx = trx.try_lock().unwrap();
-        let lock_set = db.lock_set.clone();
-
-        drop(db);
-        lock_set.lock_write(key.to_vec(), trx_id).await;
-
-        trx.write_set.insert(key.to_vec(), Some(value.to_vec()));
-        drop(trx);
-    }
-
-    pub async fn delete(&self, trx_id: usize, key: &[u8]) {
-        let mut db = self.0.lock().await;
-        let trx = db.trxs.get(&trx_id).unwrap().clone();
-        let mut trx = trx.try_lock().unwrap();
-        let lock_set = db.lock_set.clone();
-
-        drop(db);
-        lock_set.lock_write(key.to_vec(), trx_id).await;
-
-        trx.write_set.insert(key.to_vec(), None);
-        drop(trx);
-    }
-
-    pub async fn commit(&self, trx_id: usize) -> anyhow::Result<()> {
-        let mut db = self.0.lock().await;
-        let trx = db.trxs.get(&trx_id).unwrap().clone();
-        let mut trx = trx.try_lock().unwrap();
-        let lock_set = db.lock_set.clone();
-
-        let write_set = &trx.write_set;
-        apply_write_set(&mut db.values, write_set);
-        let write_set_bytes =
-            bincode::serialize(write_set).context("failed to serialize write set")?;
-        let mut logs_file_writer = BufWriter::new(&db.logs_file);
-        atomic_append::append(&mut logs_file_writer, write_set_bytes.as_slice())?;
-        drop(logs_file_writer);
-        db.logs_file.sync_all().context("failed to sync log file")?;
-        db.logs_len += 1;
-        trx.write_set = BTreeMap::new();
-        lock_set.unlock(trx_id);
-        drop(trx);
-        Ok(())
-    }
-
-    pub async fn abort(&self, trx_id: usize) {
-        let db = self.0.lock().await;
-        let trx = db.trxs.get(&trx_id).unwrap().clone();
-        let mut trx = trx.try_lock().unwrap();
-        let lock_set = db.lock_set.clone();
-
-        trx.write_set = BTreeMap::new();
-        lock_set.unlock(trx_id);
-        drop(trx);
     }
 
     pub async fn snapshot(&self) -> anyhow::Result<()> {
@@ -217,27 +189,17 @@ impl DB {
         Ok(())
     }
 
-    pub async fn new_trx(&self) -> usize {
+    pub async fn new_trx(&self) -> Trx {
         let mut db = self.0.lock().await;
 
         let trx_id = db.trx_count;
         db.trx_count += 1;
-        db.trxs.insert(
-            trx_id,
-            Arc::new(Mutex::new(Trx {
-                write_set: BTreeMap::new(),
-            })),
-        );
-        trx_id
-    }
-
-    pub async fn delete_trx(&self, trx_id: usize) {
-        let mut db = self.0.lock().await;
-        let trx = db.trxs.get(&trx_id).unwrap().clone();
-        let trx = trx.try_lock().unwrap();
-
-        db.trxs.remove(&trx_id);
-        drop(trx);
+        Trx {
+            write_set: BTreeMap::new(),
+            id: trx_id,
+            db: self.clone(),
+            lock_set: db.lock_set.clone(),
+        }
     }
 }
 
