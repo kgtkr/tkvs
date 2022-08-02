@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::process::Output;
+
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use anyhow::Context;
-use std::future::Future;
 use tokio::sync::oneshot::Receiver;
 
 use tokio::sync::oneshot;
@@ -57,7 +55,7 @@ impl MaybeLock {
                 writers,
                 readers,
             }) => match current_lock {
-                CurrentLock::Read(cur_ids) if cur_ids.contains(&id) || writers.len() == 0 => {
+                CurrentLock::Read(cur_ids) if cur_ids.contains(&id) || writers.is_empty() => {
                     cur_ids.insert(id);
                     None
                 }
@@ -138,7 +136,7 @@ impl MaybeLock {
                 if let Some((id, tx)) = writers.pop_front() {
                     *current_lock = CurrentLock::Write(id);
                     tx.send(()).unwrap();
-                } else if readers.len() > 0 {
+                } else if !readers.is_empty() {
                     *current_lock = CurrentLock::Read(readers.keys().cloned().collect());
                     let txs = readers.drain().map(|(_, tx)| tx).collect::<Vec<_>>();
                     for tx in txs {
@@ -169,7 +167,7 @@ impl MaybeLock {
         match self {
             MaybeLock::Unlocked => HashSet::new(),
             MaybeLock::Locked(Lock {
-                current_lock,
+                current_lock: _,
                 writers,
                 readers,
             }) => {
@@ -177,7 +175,7 @@ impl MaybeLock {
                 for (id, _) in writers {
                     set.insert(*id);
                 }
-                for (id, _) in readers {
+                for id in readers.keys() {
                     set.insert(*id);
                 }
                 set
@@ -204,7 +202,7 @@ impl LockSet {
     pub async fn lock_read(&self, key: RecordKey, id: TrxId) {
         let rx = {
             let mut lock_set = self.0.lock().unwrap();
-            let lock = lock_set.locks.entry(key).or_insert(MaybeLock::new());
+            let lock = lock_set.locks.entry(key).or_insert_with(MaybeLock::new);
             let rx = lock.lock_read(id);
             drop(lock_set);
             self.check_deadlock();
@@ -219,7 +217,7 @@ impl LockSet {
     pub async fn lock_write(&self, key: RecordKey, id: TrxId) {
         let rx = {
             let mut lock_set = self.0.lock().unwrap();
-            let lock = lock_set.locks.entry(key).or_insert(MaybeLock::new());
+            let lock = lock_set.locks.entry(key).or_insert_with(MaybeLock::new);
             let rx = lock.lock_write(id);
             drop(lock_set);
             self.check_deadlock();
@@ -243,10 +241,9 @@ impl LockSet {
 
     fn check_deadlock(&self) {
         let mut lock_set = self.0.lock().unwrap();
-        lock_set.locks.retain(|_, lock| match lock {
-            MaybeLock::Unlocked => false,
-            _ => true,
-        });
+        lock_set
+            .locks
+            .retain(|_, lock| matches!(lock, MaybeLock::Locked(_)));
 
         let all_ids = lock_set
             .locks
@@ -261,7 +258,7 @@ impl LockSet {
         for id in &all_ids {
             graph.insert(id, HashSet::new());
         }
-        for (_, lock) in &lock_set.locks {
+        for lock in lock_set.locks.values() {
             let tos = lock.current_lock_ids();
             let froms = lock.wait_ids();
             for &to in &tos {

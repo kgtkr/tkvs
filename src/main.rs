@@ -42,7 +42,7 @@ async fn main() {
                         trx_id,
                         value
                             .map(|value| String::from_utf8_lossy(&value).to_string())
-                            .unwrap_or("<not found>".to_string())
+                            .unwrap_or_else(|| "<not found>".to_string())
                     );
                 });
             }
