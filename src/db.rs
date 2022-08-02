@@ -14,6 +14,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 
@@ -41,9 +42,10 @@ struct DBInner {
     lock_set: LockSet,
 }
 
-#[derive(Clone)]
-pub struct DB(Arc<Mutex<DBInner>>);
+#[derive(Clone, Debug)]
+pub struct DB(mpsc::Sender<DBMessage>);
 
+#[derive(Debug)]
 pub struct Trx {
     db: DB,
     lock_set: LockSet,
@@ -70,9 +72,17 @@ impl Trx {
         {
             value
         } else {
-            // ロックしている間は値が変わることはないので複数回のdbロックを防ぐために値をキャッシュする
-            let db = self.db.0.lock().await;
-            let value = db.values.get(key).cloned();
+            // ロックしている間は値が変わることはないので複数回のアクセスを防ぐために値をキャッシュする
+            let (tx, rx) = oneshot::channel();
+            self.db
+                .0
+                .send(DBMessage::Get {
+                    key: key.to_vec(),
+                    resp: tx,
+                })
+                .await
+                .unwrap();
+            let value = rx.await.unwrap();
             self.read_set.insert(key.to_vec(), value.clone());
             value
         }
@@ -95,18 +105,18 @@ impl Trx {
     }
 
     pub async fn commit(&mut self) -> anyhow::Result<()> {
-        let mut db = self.db.0.lock().await;
+        let (tx, rx) = oneshot::channel();
+        self.db
+            .0
+            .send(DBMessage::Commit {
+                write_set: self.write_set.clone(),
+                resp: tx,
+            })
+            .await
+            .unwrap();
+        rx.await.unwrap()?;
 
-        let write_set = &self.write_set;
-        apply_write_set(&mut db.values, write_set);
-        let write_set_bytes =
-            bincode::serialize(write_set).context("failed to serialize write set")?;
-        let mut logs_file_writer = BufWriter::new(&db.logs_file);
-        atomic_append::append(&mut logs_file_writer, write_set_bytes.as_slice())?;
-        drop(logs_file_writer);
-        db.logs_file.sync_all().context("failed to sync log file")?;
-        db.logs_len += 1;
-        self.write_set.clear();
+        self.write_set = BTreeMap::new();
         self.read_set.clear();
         self.lock_set.unlock(self.id);
         Ok(())
@@ -115,6 +125,24 @@ impl Trx {
     pub fn id(&self) -> usize {
         self.id
     }
+}
+
+#[derive(Debug)]
+enum DBMessage {
+    Snapshot {
+        resp: oneshot::Sender<anyhow::Result<()>>,
+    },
+    NewTrx {
+        resp: oneshot::Sender<Trx>,
+    },
+    Commit {
+        write_set: DataBaseWriteSet,
+        resp: oneshot::Sender<anyhow::Result<()>>,
+    },
+    Get {
+        key: Key,
+        resp: oneshot::Sender<Option<Value>>,
+    },
 }
 
 impl DB {
@@ -170,54 +198,103 @@ impl DB {
             .open(&data_dir.join("logs"))
             .context("failed to open log file")?;
 
-        Ok(DB(Arc::new(Mutex::new(DBInner {
-            data_dir,
-            values,
-            logs_len,
-            logs_file,
-            trx_count: 0,
-            lock_set: LockSet::new(),
-        }))))
+        let (tx, mut rx) = mpsc::channel(32);
+        let db_ = DB(tx);
+        let db = db_.clone();
+        tokio::spawn(async move {
+            let mut state = DBInner {
+                data_dir,
+                values,
+                logs_len,
+                logs_file,
+                trx_count: 0,
+                lock_set: LockSet::new(),
+            };
+            while let Some(msg) = rx.recv().await {
+                match msg {
+                    DBMessage::Snapshot { resp } => {
+                        let res = (|| {
+                            let data_tmp_file = OpenOptions::new()
+                                .write(true)
+                                .create(true)
+                                .truncate(true)
+                                .open(&state.data_dir.join("data.tmp"))
+                                .context("failed to open data.tmp file")?;
+
+                            let mut data_tmp_file_writer = BufWriter::new(&data_tmp_file);
+                            bincode::serialize_into(&mut data_tmp_file_writer, &state.values)
+                                .context("failed to serialize data")?;
+                            data_tmp_file_writer
+                                .flush()
+                                .context("failed to flush data")?;
+                            data_tmp_file.sync_all().context("failed to sync data")?;
+                            std::fs::rename(
+                                &state.data_dir.join("data.tmp"),
+                                &state.data_dir.join("data"),
+                            )
+                            .context("failed to rename data.tmp to data")?;
+                            state
+                                .logs_file
+                                .set_len(0)
+                                .context("failed to truncate logs file")?;
+                            state.logs_len = 0;
+                            Ok(())
+                        })();
+                        resp.send(res).unwrap();
+                    }
+                    DBMessage::NewTrx { resp } => {
+                        let trx_id = state.trx_count;
+                        state.trx_count += 1;
+                        let res = Trx {
+                            write_set: BTreeMap::new(),
+                            read_set: BTreeMap::new(),
+                            id: trx_id,
+                            db: db.clone(),
+                            lock_set: state.lock_set.clone(),
+                        };
+                        resp.send(res).unwrap();
+                    }
+                    DBMessage::Commit { write_set, resp } => {
+                        let res = (|| {
+                            apply_write_set(&mut state.values, &write_set);
+                            let write_set_bytes = bincode::serialize(&write_set)
+                                .context("failed to serialize write set")?;
+                            let mut logs_file_writer = BufWriter::new(&state.logs_file);
+                            atomic_append::append(
+                                &mut logs_file_writer,
+                                write_set_bytes.as_slice(),
+                            )?;
+                            drop(logs_file_writer);
+                            state
+                                .logs_file
+                                .sync_all()
+                                .context("failed to sync log file")?;
+                            state.logs_len += 1;
+                            Ok(())
+                        })();
+                        resp.send(res).unwrap();
+                    }
+                    DBMessage::Get { key, resp } => {
+                        let res = state.values.get(&key).cloned();
+                        resp.send(res).unwrap();
+                    }
+                }
+            }
+        });
+
+        Ok(db_)
     }
 
     pub async fn snapshot(&self) -> anyhow::Result<()> {
-        let mut db = self.0.lock().await;
-
-        let data_tmp_file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&db.data_dir.join("data.tmp"))
-            .context("failed to open data.tmp file")?;
-
-        let mut data_tmp_file_writer = BufWriter::new(&data_tmp_file);
-        bincode::serialize_into(&mut data_tmp_file_writer, &db.values)
-            .context("failed to serialize data")?;
-        data_tmp_file_writer
-            .flush()
-            .context("failed to flush data")?;
-        data_tmp_file.sync_all().context("failed to sync data")?;
-        std::fs::rename(&db.data_dir.join("data.tmp"), &db.data_dir.join("data"))
-            .context("failed to rename data.tmp to data")?;
-        db.logs_file
-            .set_len(0)
-            .context("failed to truncate logs file")?;
-        db.logs_len = 0;
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.0.send(DBMessage::Snapshot { resp: tx }).await?;
+        rx.await.unwrap()
     }
 
     pub async fn new_trx(&self) -> Trx {
-        let mut db = self.0.lock().await;
-
-        let trx_id = db.trx_count;
-        db.trx_count += 1;
-        Trx {
-            write_set: BTreeMap::new(),
-            read_set: BTreeMap::new(),
-            id: trx_id,
-            db: self.clone(),
-            lock_set: db.lock_set.clone(),
-        }
+        let (tx, rx) = oneshot::channel();
+        self.0.send(DBMessage::NewTrx { resp: tx }).await.unwrap();
+        rx.await.unwrap()
     }
 }
 

@@ -14,17 +14,20 @@ use tokio::sync::oneshot;
 type TrxId = usize;
 type RecordKey = Vec<u8>;
 
+#[derive(Debug)]
 enum CurrentLock {
     Read(HashSet<TrxId>),
     Write(TrxId),
 }
 
+#[derive(Debug)]
 struct Lock {
     current_lock: CurrentLock,
     writers: VecDeque<(TrxId, oneshot::Sender<()>)>,
     readers: HashMap<TrxId, oneshot::Sender<()>>,
 }
 
+#[derive(Debug)]
 enum MaybeLock {
     Locked(Lock),
     Unlocked,
@@ -183,11 +186,12 @@ impl MaybeLock {
     }
 }
 
+#[derive(Debug)]
 struct LockSetState {
     locks: HashMap<RecordKey, MaybeLock>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LockSet(Arc<Mutex<LockSetState>>);
 
 impl LockSet {
