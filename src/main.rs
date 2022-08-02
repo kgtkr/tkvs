@@ -1,6 +1,23 @@
-use std::{collections::HashMap, io::Write, sync::Arc};
+use std::{collections::HashMap, future::Future, io::Write, sync::Arc};
 use tkvs::DB;
 use tokio::sync::Mutex;
+
+async fn task_run(name: String, future: impl Future<Output = anyhow::Result<Option<String>>>) {
+    let result = future.await;
+    print!("{}", name);
+    match result {
+        Ok(result) => {
+            print!(" success");
+            if let Some(result) = result {
+                print!(" -> {}", result);
+            }
+        }
+        Err(e) => {
+            print!(" failed -> {}", e);
+        }
+    }
+    println!();
+}
 
 #[tokio::main]
 async fn main() {
@@ -11,7 +28,7 @@ async fn main() {
     trxs.insert(trx_id, Arc::new(Mutex::new(trx)));
 
     loop {
-        println!("trx:{}> ", trx_id);
+        println!("trx:{}>", trx_id);
         std::io::stdout().flush().unwrap();
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).unwrap();
@@ -25,9 +42,16 @@ async fn main() {
                 let trx = trxs.get(&trx_id).unwrap().clone();
 
                 tokio::spawn(async move {
-                    let mut trx = trx.try_lock().unwrap();
-                    trx.put(key.as_bytes(), value.as_bytes()).await.unwrap();
-                    println!("trx:{} put success", trx_id);
+                    task_run(
+                        format!("trx:{} put", trx_id),
+                        (|| async {
+                            let mut trx =
+                                trx.try_lock().map_err(|_| anyhow::anyhow!("trx is busy"))?;
+                            trx.put(key.as_bytes(), value.as_bytes()).await?;
+                            Ok(None)
+                        })(),
+                    )
+                    .await;
                 });
             }
             "get" => {
@@ -35,15 +59,20 @@ async fn main() {
                 let trx = trxs.get(&trx_id).unwrap().clone();
 
                 tokio::spawn(async move {
-                    let mut trx = trx.try_lock().unwrap();
-                    let value = trx.get(key.as_bytes()).await.unwrap();
-                    println!(
-                        "trx:{} get success: {}",
-                        trx_id,
-                        value
-                            .map(|value| String::from_utf8_lossy(&value).to_string())
-                            .unwrap_or_else(|| "<not found>".to_string())
-                    );
+                    task_run(
+                        format!("trx:{} get", trx_id),
+                        (|| async {
+                            let mut trx =
+                                trx.try_lock().map_err(|_| anyhow::anyhow!("trx is busy"))?;
+                            let value = trx.get(key.as_bytes()).await?;
+                            Ok(Some(
+                                value
+                                    .map(|value| String::from_utf8_lossy(&value).to_string())
+                                    .unwrap_or_else(|| "<not found>".to_string()),
+                            ))
+                        })(),
+                    )
+                    .await;
                 });
             }
             "delete" => {
@@ -51,34 +80,65 @@ async fn main() {
                 let trx = trxs.get(&trx_id).unwrap().clone();
 
                 tokio::spawn(async move {
-                    let mut trx = trx.try_lock().unwrap();
+                    task_run(
+                        format!("trx:{} delete", trx_id),
+                        (|| async {
+                            let mut trx =
+                                trx.try_lock().map_err(|_| anyhow::anyhow!("trx is busy"))?;
 
-                    trx.delete(key.as_bytes()).await.unwrap();
-                    println!("trx:{} delete success", trx_id);
+                            trx.delete(key.as_bytes()).await?;
+                            Ok(None)
+                        })(),
+                    )
+                    .await;
                 });
             }
             "commit" => {
                 let trx = trxs.get(&trx_id).unwrap().clone();
 
                 tokio::spawn(async move {
-                    let mut trx = trx.try_lock().unwrap();
+                    task_run(
+                        format!("trx:{} commit", trx_id),
+                        (|| async {
+                            let mut trx =
+                                trx.try_lock().map_err(|_| anyhow::anyhow!("trx is busy"))?;
 
-                    trx.commit().await.unwrap();
-                    println!("trx:{} commit success", trx_id);
+                            trx.commit().await?;
+                            Ok(None)
+                        })(),
+                    )
+                    .await;
                 });
             }
             "abort" => {
                 let trx = trxs.get(&trx_id).unwrap().clone();
 
                 tokio::spawn(async move {
-                    let mut trx = trx.try_lock().unwrap();
+                    task_run(
+                        format!("trx:{} abort", trx_id),
+                        (|| async {
+                            let mut trx =
+                                trx.try_lock().map_err(|_| anyhow::anyhow!("trx is busy"))?;
 
-                    trx.abort().await;
-                    println!("trx:{} abort success", trx_id);
+                            trx.abort().await;
+
+                            Ok(None)
+                        })(),
+                    )
+                    .await;
                 });
             }
             "snapshot" => {
-                db.snapshot().await.unwrap();
+                tokio::spawn(async move {
+                    task_run(
+                        format!("snapshot"),
+                        (|| async {
+                            db.snapshot().await?;
+                            Ok(None)
+                        })(),
+                    )
+                    .await;
+                });
             }
             "new-trx" => {
                 let trx = db.new_trx().await;
@@ -86,7 +146,12 @@ async fn main() {
                 trxs.insert(trx_id, Arc::new(Mutex::new(trx)));
             }
             "sw-trx" => {
-                trx_id = iter.next().unwrap().parse().unwrap();
+                let id = iter.next().unwrap().parse().unwrap();
+                if trxs.contains_key(&id) {
+                    trx_id = id;
+                } else {
+                    println!("trx-{} is not found", id);
+                }
             }
             _ => println!("unknown command: {}", cmd),
         }
