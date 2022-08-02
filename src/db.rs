@@ -89,7 +89,8 @@ impl Trx {
     }
 
     pub async fn abort(&mut self) {
-        self.write_set = BTreeMap::new();
+        self.write_set.clear();
+        self.read_set.clear();
         self.lock_set.unlock(self.id);
     }
 
@@ -105,7 +106,8 @@ impl Trx {
         drop(logs_file_writer);
         db.logs_file.sync_all().context("failed to sync log file")?;
         db.logs_len += 1;
-        self.write_set = BTreeMap::new();
+        self.write_set.clear();
+        self.read_set.clear();
         self.lock_set.unlock(self.id);
         Ok(())
     }
