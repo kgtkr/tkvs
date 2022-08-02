@@ -26,7 +26,7 @@ async fn main() {
 
                 tokio::spawn(async move {
                     let mut trx = trx.try_lock().unwrap();
-                    trx.put(key.as_bytes(), value.as_bytes()).await;
+                    trx.put(key.as_bytes(), value.as_bytes()).await.unwrap();
                     println!("trx:{} put success", trx_id);
                 });
             }
@@ -36,7 +36,7 @@ async fn main() {
 
                 tokio::spawn(async move {
                     let mut trx = trx.try_lock().unwrap();
-                    let value = trx.get(key.as_bytes()).await;
+                    let value = trx.get(key.as_bytes()).await.unwrap();
                     println!(
                         "trx:{} get success: {}",
                         trx_id,
@@ -53,7 +53,7 @@ async fn main() {
                 tokio::spawn(async move {
                     let mut trx = trx.try_lock().unwrap();
 
-                    trx.delete(key.as_bytes()).await;
+                    trx.delete(key.as_bytes()).await.unwrap();
                     println!("trx:{} delete success", trx_id);
                 });
             }

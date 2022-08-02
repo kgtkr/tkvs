@@ -3,8 +3,6 @@ use super::lock_set::LockSet;
 use anyhow::Context;
 use std::collections::BTreeMap;
 
-
-
 use std::fs::File;
 use std::fs::OpenOptions;
 
@@ -13,10 +11,8 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::PathBuf;
 
-
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-
 
 type Key = Vec<u8>;
 type Value = Vec<u8>;
@@ -61,8 +57,8 @@ impl Drop for Trx {
 }
 
 impl Trx {
-    pub async fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.lock_set.lock_read(key.to_vec(), self.id).await;
+    pub async fn get(&mut self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        self.lock_set.lock_read(key.to_vec(), self.id).await?;
 
         if let Some(value) = self
             .write_set
@@ -70,7 +66,7 @@ impl Trx {
             .cloned()
             .or_else(|| self.read_set.get(key).cloned())
         {
-            value
+            Ok(value)
         } else {
             // ロックしている間は値が変わることはないので複数回のアクセスを防ぐために値をキャッシュする
             let (tx, rx) = oneshot::channel();
@@ -84,18 +80,20 @@ impl Trx {
                 .unwrap();
             let value = rx.await.unwrap();
             self.read_set.insert(key.to_vec(), value.clone());
-            value
+            Ok(value)
         }
     }
 
-    pub async fn put(&mut self, key: &[u8], value: &[u8]) {
-        self.lock_set.lock_write(key.to_vec(), self.id).await;
+    pub async fn put(&mut self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
+        self.lock_set.lock_write(key.to_vec(), self.id).await?;
         self.write_set.insert(key.to_vec(), Some(value.to_vec()));
+        Ok(())
     }
 
-    pub async fn delete(&mut self, key: &[u8]) {
-        self.lock_set.lock_write(key.to_vec(), self.id).await;
+    pub async fn delete(&mut self, key: &[u8]) -> anyhow::Result<()> {
+        self.lock_set.lock_write(key.to_vec(), self.id).await?;
         self.write_set.insert(key.to_vec(), None);
+        Ok(())
     }
 
     pub async fn abort(&mut self) {

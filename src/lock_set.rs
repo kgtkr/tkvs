@@ -5,20 +5,18 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use tokio::sync::oneshot::Receiver;
-
 use tokio::sync::oneshot;
 
 type TrxId = usize;
 type RecordKey = Vec<u8>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum CurrentLock {
     Read(HashSet<TrxId>),
     Write(TrxId),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Lock {
     current_lock: CurrentLock,
     // トランザクションは直列に実行されるため, TrxIdは重複しない
@@ -26,7 +24,7 @@ struct Lock {
     readers: HashSet<TrxId>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum MaybeLock {
     Locked(Lock),
     Unlocked,
@@ -200,43 +198,65 @@ impl LockSet {
         })))
     }
 
-    pub async fn lock_read(&self, key: RecordKey, id: TrxId) {
+    pub async fn lock_read(&self, key: RecordKey, id: TrxId) -> anyhow::Result<()> {
         let rx = {
             let mut lock_set = self.0.lock().unwrap();
-            let lock = lock_set.locks.entry(key).or_insert_with(MaybeLock::new);
+            let lock = lock_set
+                .locks
+                .entry(key.clone())
+                .or_insert_with(MaybeLock::new);
+            let prev_lock = lock.clone();
             if lock.lock_read(id) {
-                let (tx, rx) = oneshot::channel();
-                lock_set.txs.insert(id, tx);
-                drop(lock_set);
-                self.check_deadlock();
-                Some(rx)
+                if let Ok(_) = Self::check_deadlock(&lock_set.locks) {
+                    let (tx, rx) = oneshot::channel();
+                    lock_set.txs.insert(id, tx);
+                    Ok(Some(rx))
+                } else {
+                    lock_set.locks.insert(key, prev_lock);
+                    Err(anyhow::anyhow!("Deadlock detected"))
+                }
             } else {
-                None
+                Ok(None)
             }
         };
         match rx {
-            Some(f) => f.await.unwrap(),
-            None => (),
+            Ok(Some(f)) => {
+                f.await.unwrap();
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(e) => Err(e),
         }
     }
 
-    pub async fn lock_write(&self, key: RecordKey, id: TrxId) {
+    pub async fn lock_write(&self, key: RecordKey, id: TrxId) -> anyhow::Result<()> {
         let rx = {
             let mut lock_set = self.0.lock().unwrap();
-            let lock = lock_set.locks.entry(key).or_insert_with(MaybeLock::new);
+            let lock = lock_set
+                .locks
+                .entry(key.clone())
+                .or_insert_with(MaybeLock::new);
+            let prev_lock = lock.clone();
             if lock.lock_write(id) {
-                let (tx, rx) = oneshot::channel();
-                lock_set.txs.insert(id, tx);
-                drop(lock_set);
-                self.check_deadlock();
-                Some(rx)
+                if let Ok(_) = Self::check_deadlock(&lock_set.locks) {
+                    let (tx, rx) = oneshot::channel();
+                    lock_set.txs.insert(id, tx);
+                    Ok(Some(rx))
+                } else {
+                    lock_set.locks.insert(key, prev_lock);
+                    Err(anyhow::anyhow!("Deadlock detected"))
+                }
             } else {
-                None
+                Ok(None)
             }
         };
         match rx {
-            Some(f) => f.await.unwrap(),
-            None => (),
+            Ok(Some(f)) => {
+                f.await.unwrap();
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(e) => Err(e),
         }
     }
 
@@ -253,14 +273,9 @@ impl LockSet {
         }
     }
 
-    fn check_deadlock(&self) {
-        let mut lock_set = self.0.lock().unwrap();
-        lock_set
-            .locks
-            .retain(|_, lock| matches!(lock, MaybeLock::Locked(_)));
-
+    fn check_deadlock(locks: &HashMap<RecordKey, MaybeLock>) -> Result<(), ()> {
         let mut graph = HashMap::new();
-        for lock in lock_set.locks.values() {
+        for lock in locks.values() {
             let tos = lock.current_lock_ids();
             let froms = lock.wait_ids();
             for &to in &tos {
@@ -272,7 +287,6 @@ impl LockSet {
                 }
             }
         }
-        drop(lock_set);
 
         let mut sorted_ids = Vec::new();
         let mut indegree = HashMap::new();
@@ -300,8 +314,10 @@ impl LockSet {
             }
         }
 
-        if sorted_ids.len() != graph.len() {
-            panic!("deadlock detected"); // TODO: handle deadlock
+        if sorted_ids.len() == graph.len() {
+            Ok(())
+        } else {
+            Err(())
         }
     }
 }
