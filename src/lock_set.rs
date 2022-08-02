@@ -5,10 +5,11 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use bytes::Bytes;
 use tokio::sync::oneshot;
 
 type TrxId = usize;
-type RecordKey = Vec<u8>;
+type RecordKey = Bytes;
 
 #[derive(Debug, Clone)]
 enum CurrentLock {

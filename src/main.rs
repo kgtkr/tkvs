@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use std::{collections::HashMap, future::Future, io::Write, sync::Arc};
 use tkvs::DB;
@@ -76,7 +77,11 @@ async fn main() {
                                     let mut trx = trx
                                         .try_lock()
                                         .map_err(|_| anyhow::anyhow!("trx is busy"))?;
-                                    trx.put(key.as_bytes(), value.as_bytes()).await?;
+                                    trx.put(
+                                        Bytes::copy_from_slice(key.as_bytes()),
+                                        Bytes::copy_from_slice(value.as_bytes()),
+                                    )
+                                    .await?;
                                     Ok(None)
                                 })(),
                             )
@@ -93,7 +98,8 @@ async fn main() {
                                     let mut trx = trx
                                         .try_lock()
                                         .map_err(|_| anyhow::anyhow!("trx is busy"))?;
-                                    let value = trx.get(key.as_bytes()).await?;
+                                    let value =
+                                        trx.get(&Bytes::copy_from_slice(key.as_bytes())).await?;
                                     Ok(Some(
                                         value
                                             .map(|value| {
@@ -117,7 +123,7 @@ async fn main() {
                                         .try_lock()
                                         .map_err(|_| anyhow::anyhow!("trx is busy"))?;
 
-                                    trx.delete(key.as_bytes()).await?;
+                                    trx.delete(Bytes::copy_from_slice(key.as_bytes())).await?;
                                     Ok(None)
                                 })(),
                             )

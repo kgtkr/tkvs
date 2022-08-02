@@ -1,6 +1,7 @@
 use super::atomic_append;
 use super::lock_set::LockSet;
 use anyhow::Context;
+use bytes::Bytes;
 use std::collections::BTreeMap;
 
 use std::fs::File;
@@ -14,8 +15,8 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-type Key = Vec<u8>;
-type Value = Vec<u8>;
+type Key = Bytes;
+type Value = Bytes;
 type DataBaseValues = BTreeMap<Key, Value>;
 type DataBaseWriteSet = BTreeMap<Key, Option<Value>>;
 
@@ -57,8 +58,8 @@ impl Drop for Trx {
 }
 
 impl Trx {
-    pub async fn get(&mut self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
-        self.lock_set.lock_read(key.to_vec(), self.id).await?;
+    pub async fn get(&mut self, key: &Key) -> anyhow::Result<Option<Value>> {
+        self.lock_set.lock_read(key.clone(), self.id).await?;
 
         if let Some(value) = self
             .write_set
@@ -73,26 +74,26 @@ impl Trx {
             self.db
                 .0
                 .send(DBMessage::Get {
-                    key: key.to_vec(),
+                    key: key.clone(),
                     resp: tx,
                 })
                 .await
                 .unwrap();
             let value = rx.await.unwrap();
-            self.read_set.insert(key.to_vec(), value.clone());
+            self.read_set.insert(key.clone(), value.clone());
             Ok(value)
         }
     }
 
-    pub async fn put(&mut self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
-        self.lock_set.lock_write(key.to_vec(), self.id).await?;
-        self.write_set.insert(key.to_vec(), Some(value.to_vec()));
+    pub async fn put(&mut self, key: Key, value: Value) -> anyhow::Result<()> {
+        self.lock_set.lock_write(key.clone(), self.id).await?;
+        self.write_set.insert(key, Some(value));
         Ok(())
     }
 
-    pub async fn delete(&mut self, key: &[u8]) -> anyhow::Result<()> {
-        self.lock_set.lock_write(key.to_vec(), self.id).await?;
-        self.write_set.insert(key.to_vec(), None);
+    pub async fn delete(&mut self, key: Key) -> anyhow::Result<()> {
+        self.lock_set.lock_write(key.clone(), self.id).await?;
+        self.write_set.insert(key, None);
         Ok(())
     }
 
