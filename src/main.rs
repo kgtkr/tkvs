@@ -1,6 +1,32 @@
+use clap::{Parser, Subcommand};
 use std::{collections::HashMap, future::Future, io::Write, sync::Arc};
 use tkvs::DB;
 use tokio::sync::Mutex;
+
+// Parserを継承した構造体はArgの代わりに使用することが可能。
+#[derive(Parser)]
+#[clap(name = "tkvs", author = "kgtkr")]
+struct AppArg {
+    data_dir: String,
+}
+
+#[derive(Parser)]
+struct CmdArg {
+    #[clap(subcommand)]
+    action: CmdAction,
+}
+
+#[derive(Subcommand)]
+enum CmdAction {
+    Put { key: String, value: String },
+    Get { key: String },
+    Delete { key: String },
+    Commit,
+    Abort,
+    Snapshot,
+    NewTrx,
+    SwTrx { id: usize },
+}
 
 async fn task_run(name: String, future: impl Future<Output = anyhow::Result<Option<String>>>) {
     let result = future.await;
@@ -21,7 +47,9 @@ async fn task_run(name: String, future: impl Future<Output = anyhow::Result<Opti
 
 #[tokio::main]
 async fn main() {
-    let db = DB::new(std::env::args().nth(1).unwrap().into()).unwrap();
+    let arg: AppArg = AppArg::parse();
+
+    let db = DB::new(arg.data_dir.into()).unwrap();
     let mut trxs = HashMap::new();
     let trx = db.new_trx().await;
     let mut trx_id = trx.id();
@@ -32,128 +60,135 @@ async fn main() {
         std::io::stdout().flush().unwrap();
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).unwrap();
-        let mut iter = line.split_whitespace();
-        let cmd = iter.next().unwrap();
-        let db = db.clone();
-        match cmd {
-            "put" => {
-                let key = iter.next().unwrap().to_string();
-                let value = iter.next().unwrap().to_string();
-                let trx = trxs.get(&trx_id).unwrap().clone();
+        let arg = CmdArg::try_parse_from(&mut line.split_whitespace());
+        match arg {
+            Ok(arg) => {
+                let db = db.clone();
+                match arg.action {
+                    CmdAction::Put { key, value } => {
+                        let trx = trxs.get(&trx_id).unwrap().clone();
 
-                tokio::spawn(async move {
-                    task_run(
-                        format!("trx:{} put", trx_id),
-                        (|| async {
-                            let mut trx =
-                                trx.try_lock().map_err(|_| anyhow::anyhow!("trx is busy"))?;
-                            trx.put(key.as_bytes(), value.as_bytes()).await?;
-                            Ok(None)
-                        })(),
-                    )
-                    .await;
-                });
-            }
-            "get" => {
-                let key = iter.next().unwrap().to_string();
-                let trx = trxs.get(&trx_id).unwrap().clone();
+                        tokio::spawn(async move {
+                            task_run(
+                                format!("trx:{} put", trx_id),
+                                (|| async {
+                                    let mut trx = trx
+                                        .try_lock()
+                                        .map_err(|_| anyhow::anyhow!("trx is busy"))?;
+                                    trx.put(key.as_bytes(), value.as_bytes()).await?;
+                                    Ok(None)
+                                })(),
+                            )
+                            .await;
+                        });
+                    }
+                    CmdAction::Get { key } => {
+                        let trx = trxs.get(&trx_id).unwrap().clone();
 
-                tokio::spawn(async move {
-                    task_run(
-                        format!("trx:{} get", trx_id),
-                        (|| async {
-                            let mut trx =
-                                trx.try_lock().map_err(|_| anyhow::anyhow!("trx is busy"))?;
-                            let value = trx.get(key.as_bytes()).await?;
-                            Ok(Some(
-                                value
-                                    .map(|value| String::from_utf8_lossy(&value).to_string())
-                                    .unwrap_or_else(|| "<not found>".to_string()),
-                            ))
-                        })(),
-                    )
-                    .await;
-                });
-            }
-            "delete" => {
-                let key = iter.next().unwrap().to_string();
-                let trx = trxs.get(&trx_id).unwrap().clone();
+                        tokio::spawn(async move {
+                            task_run(
+                                format!("trx:{} get", trx_id),
+                                (|| async {
+                                    let mut trx = trx
+                                        .try_lock()
+                                        .map_err(|_| anyhow::anyhow!("trx is busy"))?;
+                                    let value = trx.get(key.as_bytes()).await?;
+                                    Ok(Some(
+                                        value
+                                            .map(|value| {
+                                                String::from_utf8_lossy(&value).to_string()
+                                            })
+                                            .unwrap_or_else(|| "<not found>".to_string()),
+                                    ))
+                                })(),
+                            )
+                            .await;
+                        });
+                    }
+                    CmdAction::Delete { key } => {
+                        let trx = trxs.get(&trx_id).unwrap().clone();
 
-                tokio::spawn(async move {
-                    task_run(
-                        format!("trx:{} delete", trx_id),
-                        (|| async {
-                            let mut trx =
-                                trx.try_lock().map_err(|_| anyhow::anyhow!("trx is busy"))?;
+                        tokio::spawn(async move {
+                            task_run(
+                                format!("trx:{} delete", trx_id),
+                                (|| async {
+                                    let mut trx = trx
+                                        .try_lock()
+                                        .map_err(|_| anyhow::anyhow!("trx is busy"))?;
 
-                            trx.delete(key.as_bytes()).await?;
-                            Ok(None)
-                        })(),
-                    )
-                    .await;
-                });
-            }
-            "commit" => {
-                let trx = trxs.get(&trx_id).unwrap().clone();
+                                    trx.delete(key.as_bytes()).await?;
+                                    Ok(None)
+                                })(),
+                            )
+                            .await;
+                        });
+                    }
+                    CmdAction::Commit => {
+                        let trx = trxs.get(&trx_id).unwrap().clone();
 
-                tokio::spawn(async move {
-                    task_run(
-                        format!("trx:{} commit", trx_id),
-                        (|| async {
-                            let mut trx =
-                                trx.try_lock().map_err(|_| anyhow::anyhow!("trx is busy"))?;
+                        tokio::spawn(async move {
+                            task_run(
+                                format!("trx:{} commit", trx_id),
+                                (|| async {
+                                    let mut trx = trx
+                                        .try_lock()
+                                        .map_err(|_| anyhow::anyhow!("trx is busy"))?;
 
-                            trx.commit().await?;
-                            Ok(None)
-                        })(),
-                    )
-                    .await;
-                });
-            }
-            "abort" => {
-                let trx = trxs.get(&trx_id).unwrap().clone();
+                                    trx.commit().await?;
+                                    Ok(None)
+                                })(),
+                            )
+                            .await;
+                        });
+                    }
+                    CmdAction::Abort => {
+                        let trx = trxs.get(&trx_id).unwrap().clone();
 
-                tokio::spawn(async move {
-                    task_run(
-                        format!("trx:{} abort", trx_id),
-                        (|| async {
-                            let mut trx =
-                                trx.try_lock().map_err(|_| anyhow::anyhow!("trx is busy"))?;
+                        tokio::spawn(async move {
+                            task_run(
+                                format!("trx:{} abort", trx_id),
+                                (|| async {
+                                    let mut trx = trx
+                                        .try_lock()
+                                        .map_err(|_| anyhow::anyhow!("trx is busy"))?;
 
-                            trx.abort().await;
+                                    trx.abort().await;
 
-                            Ok(None)
-                        })(),
-                    )
-                    .await;
-                });
-            }
-            "snapshot" => {
-                tokio::spawn(async move {
-                    task_run(
-                        format!("snapshot"),
-                        (|| async {
-                            db.snapshot().await?;
-                            Ok(None)
-                        })(),
-                    )
-                    .await;
-                });
-            }
-            "new-trx" => {
-                let trx = db.new_trx().await;
-                trx_id = trx.id();
-                trxs.insert(trx_id, Arc::new(Mutex::new(trx)));
-            }
-            "sw-trx" => {
-                let id = iter.next().unwrap().parse().unwrap();
-                if trxs.contains_key(&id) {
-                    trx_id = id;
-                } else {
-                    println!("trx-{} is not found", id);
+                                    Ok(None)
+                                })(),
+                            )
+                            .await;
+                        });
+                    }
+                    CmdAction::Snapshot => {
+                        tokio::spawn(async move {
+                            task_run(
+                                format!("snapshot"),
+                                (|| async {
+                                    db.snapshot().await?;
+                                    Ok(None)
+                                })(),
+                            )
+                            .await;
+                        });
+                    }
+                    CmdAction::NewTrx => {
+                        let trx = db.new_trx().await;
+                        trx_id = trx.id();
+                        trxs.insert(trx_id, Arc::new(Mutex::new(trx)));
+                    }
+                    CmdAction::SwTrx { id } => {
+                        if trxs.contains_key(&id) {
+                            trx_id = id;
+                        } else {
+                            println!("trx-{} is not found", id);
+                        }
+                    }
                 }
             }
-            _ => println!("unknown command: {}", cmd),
+            Err(e) => {
+                println!("{}", e);
+            }
         }
     }
 }
