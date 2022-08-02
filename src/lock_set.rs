@@ -108,12 +108,24 @@ impl MaybeLock {
     fn unlock(&mut self, id: usize) -> Option<()> {
         match self {
             MaybeLock::Unlocked => None,
-            MaybeLock::Locked(Lock { current_lock, .. }) => match current_lock {
+            MaybeLock::Locked(Lock {
+                current_lock,
+                writers,
+                ..
+            }) => match current_lock {
                 CurrentLock::Read(cur_ids) if cur_ids.contains(&id) => {
                     cur_ids.remove(&id);
                     if cur_ids.is_empty() {
                         self.current_lock_unlock();
+                    } else if cur_ids.len() == 1 {
+                        let cur_id = *cur_ids.iter().next().unwrap();
+                        if let Some(waiter_idx) = writers.iter().position(|(id, _)| *id == cur_id) {
+                            let (waiter_id, waiter_tx) = writers.remove(waiter_idx).unwrap();
+                            *current_lock = CurrentLock::Write(waiter_id);
+                            waiter_tx.send(()).unwrap();
+                        }
                     }
+
                     Some(())
                 }
                 CurrentLock::Write(cur_id) if cur_id == &id => {
@@ -263,7 +275,9 @@ impl LockSet {
             let froms = lock.wait_ids();
             for &to in &tos {
                 for &from in &froms {
-                    graph.get_mut(&from).unwrap().insert(to);
+                    if from != to {
+                        graph.get_mut(&from).unwrap().insert(to);
+                    }
                 }
             }
         }
