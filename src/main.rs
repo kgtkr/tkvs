@@ -11,7 +11,7 @@ struct AppArg {
 }
 
 #[derive(Parser)]
-#[clap(name = "tkvs-repl")]
+#[clap(name = "")]
 struct CmdArg {
     #[clap(subcommand)]
     action: CmdAction,
@@ -188,7 +188,7 @@ async fn main() {
                 }
             }
             Err(e) => {
-                println!("{}", e);
+                println!("{}", format!("{}", e).trim());
             }
         }
     }
