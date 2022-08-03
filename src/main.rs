@@ -1,7 +1,9 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
+use std::io::Cursor;
 use std::{collections::HashMap, future::Future, io::Write, sync::Arc};
 use tkvs::DB;
+use tokio::io::AsyncBufReadExt;
 use tokio::sync::Mutex;
 
 // Parserを継承した構造体はArgの代わりに使用することが可能。
@@ -56,12 +58,12 @@ async fn main() {
     let trx = db.new_trx().await;
     let mut trx_id = trx.id();
     trxs.insert(trx_id, Arc::new(Mutex::new(trx)));
+    let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
 
-    loop {
+    while let Some(line) = {
         println!("trx:{}>", trx_id);
-        std::io::stdout().flush().unwrap();
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line).unwrap();
+        lines.next_line().await.unwrap()
+    } {
         let arg = CmdArg::try_parse_from(&mut std::iter::once("").chain(line.split_whitespace()));
         match arg {
             Ok(arg) => {
