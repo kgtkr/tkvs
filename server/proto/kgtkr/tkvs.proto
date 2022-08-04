@@ -1,0 +1,80 @@
+syntax = "proto3";
+package kgtkr.tkvs;
+
+import "google/protobuf/wrappers.proto";
+
+service Tkvs {
+  rpc StartSession(StartSessionRequest) returns (StartSessionResponse) {}
+  rpc EndSession(EndSessionRequest) returns (EndSessionResponse) {}
+  rpc KeepAliveSession(KeepAliveSessionRequest) returns (KeepAliveSessionResponse) {}
+  rpc Get(GetRequest) returns (GetResponse) {}
+  rpc Put(PutRequest) returns (PutResponse) {}
+  rpc Delete(DeleteRequest) returns (DeleteResponse) {}
+  rpc Commit(CommitRequest) returns (CommitResponse) {}
+  rpc Abort(AbortRequest) returns (AbortResponse) {}
+}
+
+message StartSessionRequest {
+
+}
+
+message StartSessionResponse {
+  string session_id = 1;
+  uint64 ttl = 2;
+}
+
+message EndSessionRequest {
+  string session_id = 1;
+}
+
+message EndSessionResponse {
+
+}
+
+message KeepAliveSessionRequest {
+  string session_id = 1;
+}
+
+message KeepAliveSessionResponse {
+  uint64 ttl = 1;
+}
+
+message GetRequest {
+  string session_id = 1;
+  bytes key = 2;
+}
+
+message GetResponse {
+  google.protobuf.BytesValue value = 1;
+}
+
+message PutRequest {
+  string session_id = 1;
+  bytes key = 2;
+  bytes value = 3;
+}
+
+message PutResponse {
+}
+
+message DeleteRequest {
+  string session_id = 1;
+  bytes key = 2;
+}
+
+message DeleteResponse {
+}
+
+message CommitRequest {
+  string session_id = 1;
+}
+
+message CommitResponse {
+}
+
+message AbortRequest {
+  string session_id = 1;
+}
+
+message AbortResponse {
+}

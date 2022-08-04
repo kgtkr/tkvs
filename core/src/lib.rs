@@ -1,4 +1,4 @@
 mod atomic_append;
 mod db;
 mod lock_set;
-pub use db::DB;
+pub use db::{Trx, DB};

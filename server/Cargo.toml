@@ -1,0 +1,20 @@
+[package]
+edition = "2021"
+name = "tkvs-server"
+version = "0.1.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.59"
+bytes = "1.2.1"
+clap = {version = "3.2.16", features = ["derive"]}
+dashmap = "5.3.4"
+prost = "0.11.0"
+rand = "0.8.5"
+tkvs-core = {path = "../core"}
+tokio = {version = "1.20.1", features = ["full"]}
+tonic = "0.8.0"
+
+[build-dependencies]
+tonic-build = "0.8"
