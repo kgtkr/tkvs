@@ -12,12 +12,14 @@ const HASH_LEN: usize = 32;
 const LEN_SIZE: usize = 4;
 
 pub fn append(writer: &mut impl Write, value: &[u8]) -> anyhow::Result<()> {
+    // valueの長さチェック
     let mut hasher = Sha256::new();
     hasher.input(value);
     let mut hash = [0; HASH_LEN];
     hasher.result(&mut hash);
+    let len = u32::try_from(value.len())?;
     writer.write_all(hash.as_slice())?;
-    writer.write_all((value.len() as u32).to_le_bytes().as_slice())?;
+    writer.write_all(len.to_le_bytes().as_slice())?;
     writer.write_all(value)?;
     writer.flush()?;
     Ok(())

@@ -239,7 +239,12 @@ impl DB {
                             state.logs_len = 0;
                             Ok(())
                         })();
+                        let err = res.as_ref().err().map(|e| format!("{}", e));
                         resp.send(res).unwrap();
+                        if let Some(err) = err {
+                            tracing::error!("snapshot error, and shutdown: {}", err);
+                            return;
+                        }
                     }
                     DBMessage::NewTrx { resp } => {
                         let trx_id = state.trx_count;
@@ -256,8 +261,8 @@ impl DB {
                     DBMessage::Commit { write_set, resp } => {
                         let res = (|| {
                             apply_write_set(&mut state.values, &write_set);
-                            let write_set_bytes = bincode::serialize(&write_set)
-                                .context("failed to serialize write set")?;
+
+                            let write_set_bytes = bincode::serialize(&write_set).unwrap();
                             let mut logs_file_writer = BufWriter::new(&state.logs_file);
                             atomic_append::append(
                                 &mut logs_file_writer,
@@ -271,7 +276,12 @@ impl DB {
                             state.logs_len += 1;
                             Ok(())
                         })();
+                        let err = res.as_ref().err().map(|e| format!("{}", e));
                         resp.send(res).unwrap();
+                        if let Some(err) = err {
+                            tracing::error!("snapshot error, and shutdown: {}", err);
+                            return;
+                        }
                     }
                     DBMessage::Get { key, resp } => {
                         let res = state.values.get(&key).cloned();
