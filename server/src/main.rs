@@ -1,5 +1,3 @@
-use std::sync::{Arc, Mutex};
-
 use bytes::Bytes;
 use dashmap::mapref;
 use dashmap::DashMap;
@@ -12,13 +10,16 @@ const MAX_TTL: u64 = 60;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let addr = "[::1]:50051".parse()?;
+    tracing_subscriber::fmt::init();
+
+    let addr = "127.0.0.1:50051".parse()?;
     let tkvs = TkvsService {
         sessions: DashMap::new(),
         db: DB::new("data".into()).unwrap(),
     };
 
     Server::builder()
+        .trace_fn(|_| tracing::info_span!("gRPC server"))
         .add_service(tkvs_protos::tkvs_server::TkvsServer::new(tkvs))
         .serve(addr)
         .await?;
@@ -74,9 +75,10 @@ impl TkvsService {
 
 #[tonic::async_trait]
 impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
+    #[tracing::instrument]
     async fn start_session(
         &self,
-        request: Request<tkvs_protos::StartSessionRequest>,
+        _request: Request<tkvs_protos::StartSessionRequest>,
     ) -> Result<Response<tkvs_protos::StartSessionResponse>, Status> {
         let session_id = {
             let mut rng = rand::thread_rng();
@@ -97,6 +99,7 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         Ok(Response::new(response))
     }
 
+    #[tracing::instrument]
     async fn end_session(
         &self,
         request: Request<tkvs_protos::EndSessionRequest>,
@@ -108,6 +111,7 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         Ok(Response::new(response))
     }
 
+    #[tracing::instrument]
     async fn keep_alive_session(
         &self,
         request: Request<tkvs_protos::KeepAliveSessionRequest>,
@@ -120,6 +124,7 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         Ok(Response::new(response))
     }
 
+    #[tracing::instrument]
     async fn get(
         &self,
         request: Request<tkvs_protos::GetRequest>,
@@ -139,6 +144,7 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         Ok(Response::new(response))
     }
 
+    #[tracing::instrument]
     async fn put(
         &self,
         request: Request<tkvs_protos::PutRequest>,
@@ -155,6 +161,7 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         Ok(Response::new(response))
     }
 
+    #[tracing::instrument]
     async fn delete(
         &self,
         request: Request<tkvs_protos::DeleteRequest>,
@@ -171,6 +178,7 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         Ok(Response::new(response))
     }
 
+    #[tracing::instrument]
     async fn commit(
         &self,
         request: Request<tkvs_protos::CommitRequest>,
@@ -187,6 +195,7 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         Ok(Response::new(response))
     }
 
+    #[tracing::instrument]
     async fn abort(
         &self,
         request: Request<tkvs_protos::AbortRequest>,
