@@ -3,5 +3,3 @@ user: ubuntu
 password: ubuntu
 chpasswd: { expire: False }
 ssh_pwauth: True
-ssh_authorized_keys:
-  - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDuvordG7C+HLrwZGn44x96dlffZKvc/QcLUAE0CwwJ0f4Erlr0uvbP2F+0hdwBoVub3+Yi6En4SgaWO+frD6MIe9+T/T8O6u/NPjTqqSnTQSbxVF6+8ufsvtG9BdRUAngR7ozA3jdOg+WiRaqjxMwQ+s92wYFUpF9eagxx+Oz8mI/jWixgZq1iUaA+iNtYNyJKisJ+7cEW/yD84CvfxKQxAL1HS9ejQh4z8qFmN+ZlXwOJFJ0xstCAyLOfvv0Tt1xbGoYtwjjBgTZDOauyDShIZ+2mAw+7WtOeTn6BNRVGjT9UGBV7/ZkvZwRb5LVyLj2mFoE/kWLDlTyqnsCPVyCKsckRKkGVNuOMMonkOI8WBqbdhi1HS4toRobP4O/bHbtAPY7EygzD36A8bm5kliOZjSM5Q5TMvv2rMXVdm8As9cU9EhVinOShZz15FEH39eiIL/gMUDv125W0gd9MU065s6DqFLgRxR79lfJAkJ04/6AsQTywS4FDug0mYP2jSF0=
