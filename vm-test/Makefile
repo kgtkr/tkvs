@@ -1,4 +1,4 @@
-ssh_options=-p 1722 -o StrictHostKeyChecking=no
+ssh_options=-p 1722 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
 remote=ubuntu@localhost
 sshpass=sshpass -p ubuntu
 ssh_with_sshpass=$(sshpass) ssh $(ssh_options) $(remote)
@@ -27,7 +27,6 @@ tkvs-server:
 disk.img: focal-server-cloudimg-arm64.img cloud.img flash0.img
 	dd if=/dev/zero of=flash1.img bs=1M count=64
 	cp focal-server-cloudimg-arm64.img disk.img
-	ssh-keygen -f ~/.ssh/known_hosts -R "[localhost]:1722"
 
 
 .PHONY: up-vm
