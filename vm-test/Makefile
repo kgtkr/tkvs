@@ -51,3 +51,7 @@ copy-tkvs-server: tkvs-server
 	$(ssh_with_sshpass) mkdir -p /home/ubuntu/tkvs
 	$(sshpass) rsync -ave "ssh $(ssh_options)" tkvs-server $(remote):/home/ubuntu/tkvs/tkvs-server
 
+.PHONY: run-tkvs-server
+run-tkvs-server:
+	$(ssh_with_sshpass) mkdir -p /home/ubuntu/tkvs/data
+	$(ssh_with_sshpass) TKVS_DATA=/home/ubuntu/tkvs/data TKVS_IP=0.0.0.0 /home/ubuntu/tkvs/tkvs-server
