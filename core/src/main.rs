@@ -1,7 +1,6 @@
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
-use std::io::Cursor;
-use std::{collections::HashMap, future::Future, io::Write, sync::Arc};
+use std::{collections::HashMap, future::Future, sync::Arc};
 use tkvs_core::DB;
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::Mutex;

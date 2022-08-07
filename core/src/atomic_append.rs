@@ -1,5 +1,4 @@
-use crypto::digest::Digest;
-use crypto::sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::io::Write;
 
@@ -12,11 +11,9 @@ const HASH_LEN: usize = 32;
 const LEN_SIZE: usize = 4;
 
 pub fn append(writer: &mut impl Write, value: &[u8]) -> anyhow::Result<()> {
-    // valueの長さチェック
     let mut hasher = Sha256::new();
-    hasher.input(value);
-    let mut hash = [0; HASH_LEN];
-    hasher.result(&mut hash);
+    hasher.update(value);
+    let hash: [u8; HASH_LEN] = hasher.finalize().into();
     let len = u32::try_from(value.len())?;
     writer.write_all(hash.as_slice())?;
     writer.write_all(len.to_le_bytes().as_slice())?;
@@ -60,9 +57,8 @@ pub fn read(reader: &mut impl Read) -> anyhow::Result<(Vec<u8>, usize)> {
         .map_err(convert_read_exact_error)?;
 
     let mut hasher = Sha256::new();
-    let mut expect_hash = [0; HASH_LEN];
-    hasher.input(value.as_slice());
-    hasher.result(&mut expect_hash);
+    hasher.update(value.as_slice());
+    let expect_hash: [u8; HASH_LEN] = hasher.finalize().into();
     if hash != expect_hash {
         return Err(ReadError::HashMismatch.into());
     }
