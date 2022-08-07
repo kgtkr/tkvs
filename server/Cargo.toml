@@ -1,18 +1,25 @@
 [package]
 edition = "2021"
-name = "tkvs-core"
+name = "tkvs-server"
 version = "0.1.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.58"
-bincode = "1.3.3"
-bytes = {version = "1.2.1", features = ["serde"]}
+anyhow = "1.0.59"
+bytes = "1.2.1"
 clap = {version = "3.2.16", features = ["derive"]}
+dashmap = "5.3.4"
+prost = "0.11.0"
 rand = "0.8.5"
-serde = {version = "1.0.140", features = ["derive"]}
-sha2 = "0.10"
-thiserror = "1.0.31"
+tkvs-core = {path = "../core"}
 tokio = {version = "1.20.1", features = ["full"]}
+tonic = "0.8.0"
 tracing = "0.1.36"
+tracing-subscriber = "0.3.15"
+serde = "1.0.137"
+serde-env = "0.0.3"
+tonic-reflection = "0.5.0"
+
+[build-dependencies]
+tonic-build = "0.8"

@@ -1,0 +1,11 @@
+[target.aarch64-unknown-linux-gnu]
+pre-build = [
+    """
+    apt-get update && apt-get install -y unzip &&
+    ARCH=$(test $(uname -p) = "x86_64" && echo "x86_64" || echo "aarch_64") &&
+    VER="21.4" &&
+    FILE="protoc-$VER-linux-$ARCH.zip" &&
+    curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$VER/$FILE &&
+    unzip $FILE -d /usr/local
+"""
+]
