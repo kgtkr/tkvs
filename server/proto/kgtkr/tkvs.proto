@@ -12,6 +12,7 @@ service Tkvs {
   rpc Delete(DeleteRequest) returns (DeleteResponse) {}
   rpc Commit(CommitRequest) returns (CommitResponse) {}
   rpc Abort(AbortRequest) returns (AbortResponse) {}
+  rpc Snapshot(SnapshotRequest) returns (SnapshotResponse) {}
 }
 
 message StartSessionRequest {
@@ -77,4 +78,10 @@ message AbortRequest {
 }
 
 message AbortResponse {
+}
+
+message SnapshotRequest {
+}
+
+message SnapshotResponse {
 }

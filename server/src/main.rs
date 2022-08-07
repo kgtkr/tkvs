@@ -222,4 +222,17 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         let response = tkvs_protos::AbortResponse {};
         Ok(Response::new(response))
     }
+
+    #[tracing::instrument]
+    async fn snapshot(
+        &self,
+        _request: Request<tkvs_protos::SnapshotRequest>,
+    ) -> Result<Response<tkvs_protos::SnapshotResponse>, Status> {
+        self.db.snapshot().await.map_err(|e| {
+            tracing::error!("{}", e);
+            Status::new(Code::Aborted, e.to_string())
+        })?;
+        let response = tkvs_protos::SnapshotResponse {};
+        Ok(Response::new(response))
+    }
 }

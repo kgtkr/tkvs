@@ -978,6 +978,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tkvs-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "prost",
+ "tokio",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "tkvs-core"
 version = "0.1.0"
 dependencies = [
