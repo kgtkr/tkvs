@@ -821,6 +821,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-env"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e3db12214f282126b26c31a959a880721f669a5133de8041541d8060ea30a20"
+dependencies = [
+ "anyhow",
+ "log",
+ "serde",
+]
+
+[[package]]
 name = "serde_derive"
 version = "1.0.142"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -992,6 +1003,8 @@ dependencies = [
  "dashmap",
  "prost",
  "rand",
+ "serde",
+ "serde-env",
  "tkvs-core",
  "tokio",
  "tonic",

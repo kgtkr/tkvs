@@ -2,9 +2,11 @@ use bytes::Bytes;
 use dashmap::mapref;
 use dashmap::DashMap;
 use rand::{distributions::Alphanumeric, Rng};
+use std::net::SocketAddr;
 use std::time::Instant;
 use tkvs_core::{Trx, DB};
 use tonic::{transport::Server, Code, Request, Response, Status};
+mod app_config;
 
 const MAX_TTL: u64 = 60;
 
@@ -12,10 +14,12 @@ const MAX_TTL: u64 = 60;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let addr = "127.0.0.1:50051".parse()?;
+    let config = app_config::AppConfig::from_env().unwrap();
+
+    let addr = SocketAddr::new(config.ip, config.port);
     let tkvs = TkvsService {
         sessions: DashMap::new(),
-        db: DB::new("data".into()).unwrap(),
+        db: DB::new(config.data.into()).unwrap(),
     };
 
     Server::builder()
