@@ -80,11 +80,11 @@ async fn main() {
                         })
                         .await
                     {
-                        Ok(result) => {
-                            println!("{:?}", result.into_inner());
+                        Ok(_) => {
+                            println!("ok");
                         }
                         Err(e) => {
-                            println!("{:?}", e);
+                            println!("err: {}", e);
                         }
                     }
                 }
@@ -97,10 +97,18 @@ async fn main() {
                         .await
                     {
                         Ok(result) => {
-                            println!("{:?}", result.into_inner());
+                            println!(
+                                "ok: {}",
+                                result
+                                    .into_inner()
+                                    .value
+                                    .map(|value| String::from_utf8_lossy(value.as_slice())
+                                        .to_string())
+                                    .unwrap_or("<none>".to_string())
+                            );
                         }
                         Err(e) => {
-                            println!("{:?}", e);
+                            println!("err: {}", e);
                         }
                     }
                 }
@@ -112,11 +120,11 @@ async fn main() {
                         })
                         .await
                     {
-                        Ok(result) => {
-                            println!("{:?}", result.into_inner());
+                        Ok(_) => {
+                            println!("ok");
                         }
                         Err(e) => {
-                            println!("{:?}", e);
+                            println!("err: {}", e);
                         }
                     }
                 }
@@ -127,11 +135,11 @@ async fn main() {
                         })
                         .await
                     {
-                        Ok(result) => {
-                            println!("{:?}", result.into_inner());
+                        Ok(_) => {
+                            println!("ok");
                         }
                         Err(e) => {
-                            println!("{:?}", e);
+                            println!("err: {}", e);
                         }
                     }
                 }
@@ -142,21 +150,21 @@ async fn main() {
                         })
                         .await
                     {
-                        Ok(result) => {
-                            println!("{:?}", result.into_inner());
+                        Ok(_) => {
+                            println!("ok");
                         }
                         Err(e) => {
-                            println!("{:?}", e);
+                            println!("err: {}", e);
                         }
                     }
                 }
                 CmdAction::Snapshot => {
                     match client.snapshot(tkvs_protos::SnapshotRequest {}).await {
-                        Ok(result) => {
-                            println!("{:?}", result.into_inner());
+                        Ok(_) => {
+                            println!("ok");
                         }
                         Err(e) => {
-                            println!("{:?}", e);
+                            println!("err: {}", e);
                         }
                     }
                 }
