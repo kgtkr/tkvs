@@ -21,7 +21,7 @@ flash0.img: QEMU_EFI.fd
 
 .PHONY: tkvs-server
 tkvs-server:
-	cd .. && nix develop .#aarch64-linux-cross -c cargo build --target aarch64-unknown-linux-gnu && cp target/aarch64-unknown-linux-gnu/debug/tkvs-server vm-test/tkvs-server
+	cd .. && cargo build --target aarch64-unknown-linux-gnu && cp target/aarch64-unknown-linux-gnu/debug/tkvs-server vm-test/tkvs-server
 
 # vmを作り直すときはdisk.imgを削除する
 disk.img: focal-server-cloudimg-arm64.img cloud.img flash0.img

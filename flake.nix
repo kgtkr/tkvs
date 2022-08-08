@@ -24,19 +24,7 @@
             buildInputs = lib.optionals stdenv.isDarwin [
               libiconv
             ];
-          };
-        devShells.aarch64-linux-cross =
-          let
-            pkgs = import nixpkgs {
-              system = if system == "aarch64-darwin" then "x86_64-darwin" else system;
-              crossSystem = "aarch64-linux";
-            };
-          in
-          with pkgs; mkShell {
-            nativeBuildInputs = [
-              pkg-config
-            ];
-            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "${stdenv.cc.targetPrefix}cc";
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "aarch64-unknown-linux-gnu-gcc";
           };
       }
     );
