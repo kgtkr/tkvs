@@ -29,14 +29,16 @@
           };
         devShells.aarch64-linux-cross =
           let
-            pkgs = import nixpkgs {
+            pkgs = (import nixpkgs {
               system = if system == "aarch64-darwin" then "x86_64-darwin" else system;
-              crossSystem = "aarch64-linux";
-            };
+            }).pkgsCross.aarch64-multiplatform-musl.pkgsStatic;
           in
           with pkgs; mkShell {
             nativeBuildInputs = [
               pkg-config
+            ];
+            buildInputs = [
+              libiconv
             ];
             CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = "${stdenv.cc.targetPrefix}cc";
           };
