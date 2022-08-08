@@ -21,6 +21,9 @@
               gnumake
               sshpass
             ];
+            buildInputs = lib.optionals stdenv.isDarwin [
+              libiconv
+            ];
           };
         devShells.aarch64-linux-cross =
           let
