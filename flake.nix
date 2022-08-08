@@ -21,6 +21,7 @@
               gnumake
               sshpass
               patchelf
+              (callPackage ./cloud-localds.nix {})
             ];
             buildInputs = lib.optionals stdenv.isDarwin [
               libiconv

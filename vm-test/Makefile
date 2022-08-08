@@ -6,11 +6,8 @@ ssh_with_sshpass=$(sshpass) ssh $(ssh_options) $(remote)
 focal-server-cloudimg-arm64.img:
 	wget https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-arm64.img
 
-cloud.img: image/cloud.txt
-	docker build -t tmp-cloud-image image
-	docker create --name tmp-cloud-image tmp-cloud-image
-	docker cp tmp-cloud-image:/cloud.img .
-	docker rm tmp-cloud-image
+cloud.img: cloud.txt
+	cloud-localds --disk-format qcow2 cloud.img cloud.txt
 
 QEMU_EFI.fd:
 	wget https://releases.linaro.org/components/kernel/uefi-linaro/latest/release/qemu64/QEMU_EFI.fd
@@ -23,14 +20,20 @@ flash0.img: QEMU_EFI.fd
 tkvs-server:
 	cd .. && nix develop .#aarch64-linux-cross -c cargo build --target aarch64-unknown-linux-musl && cp target/aarch64-unknown-linux-musl/debug/tkvs-server vm-test/tkvs-server
 
-# vmを作り直すときはdisk.imgを削除する
-disk.img: focal-server-cloudimg-arm64.img cloud.img flash0.img
+disk.img: focal-server-cloudimg-arm64.img
 	dd if=/dev/zero of=flash1.img bs=1M count=64
 	cp focal-server-cloudimg-arm64.img disk.img
 
+flash1.img:
+	dd if=/dev/zero of=flash1.img bs=1M count=64
+
+.PHONY: clean-vm
+clean-vm:
+	rm flash1.img
+	rm disk.img
 
 .PHONY: up-vm
-up-vm:
+up-vm: cloud.img flash0.img flash1.img disk.img
 	qemu-system-aarch64 -m 1024 -cpu cortex-a57 -M virt -nographic \
 		-drive if=pflash,format=raw,readonly=true,file=flash0.img \
 		-drive if=pflash,format=raw,file=flash1.img \
