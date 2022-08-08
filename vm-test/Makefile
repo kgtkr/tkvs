@@ -1,48 +1,28 @@
-ssh_options=-p 1722 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-remote=ubuntu@localhost
-sshpass=sshpass -p ubuntu
-ssh_with_sshpass=$(sshpass) ssh $(ssh_options) $(remote)
-
-focal-server-cloudimg-arm64.img:
-	wget https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-arm64.img
-
-cloud.img: cloud.txt
-	cloud-localds --disk-format qcow2 cloud.img cloud.txt
-
-QEMU_EFI.fd:
-	wget https://releases.linaro.org/components/kernel/uefi-linaro/latest/release/qemu64/QEMU_EFI.fd
-
-flash0.img: QEMU_EFI.fd
-	dd if=/dev/zero of=flash0.img bs=1M count=64
-	dd if=QEMU_EFI.fd of=flash0.img conv=notrunc
+ssh_port=1722
+ssh_options=-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+remote=arch@localhost
+sshpass=sshpass -p arch
+ssh_with_sshpass=$(sshpass) ssh $(ssh_options) -p $(ssh_port) $(remote)
 
 .PHONY: tkvs-server
 tkvs-server:
-	cd .. && nix develop .#aarch64-linux-cross -c cargo build --target aarch64-unknown-linux-musl && cp target/aarch64-unknown-linux-musl/debug/tkvs-server vm-test/tkvs-server
+	cd .. && nix develop .#x86_64-linux-cross -c cargo build --target x86_64-unknown-linux-musl && cp target/x86_64-unknown-linux-musl/debug/tkvs-server vm-test/tkvs-server
 
-disk.img: focal-server-cloudimg-arm64.img
-	dd if=/dev/zero of=flash1.img bs=1M count=64
-	cp focal-server-cloudimg-arm64.img disk.img
+Arch-Linux-x86_64-basic.qcow2:
+	wget https://geo.mirror.pkgbuild.com/images/v20220801.71902/Arch-Linux-x86_64-basic.qcow2
 
-flash1.img:
-	dd if=/dev/zero of=flash1.img bs=1M count=64
+disk.qcow2: Arch-Linux-x86_64-basic.qcow2
+	cp Arch-Linux-x86_64-basic.qcow2 disk.qcow2
 
 .PHONY: clean-vm
 clean-vm:
-	rm flash1.img
-	rm disk.img
+	rm disk.qcow2
 
 .PHONY: up-vm
-up-vm: cloud.img flash0.img flash1.img disk.img
-	qemu-system-aarch64 -m 1024 -cpu cortex-a57 -M virt -nographic \
-		-drive if=pflash,format=raw,readonly=true,file=flash0.img \
-		-drive if=pflash,format=raw,file=flash1.img \
-		-drive if=none,file=disk.img,id=hd0 \
-		-device virtio-blk-device,drive=hd0 \
-		-drive if=none,readonly=true,id=cloud,file=cloud.img \
-		-device virtio-blk-device,drive=cloud \
-		-device virtio-net-device,netdev=net \
-		-netdev user,id=net,hostfwd=tcp::1722-:22,hostfwd=tcp::17051-:50051 \
+up-vm: disk.qcow2
+	qemu-system-x86_64 -m 512 \
+		-drive file=disk.qcow2,if=virtio \
+		-net nic -net user,hostfwd=tcp::$(ssh_port)-:22,hostfwd=tcp::17051-:50051
 
 .PHONY: wait-vm
 wait-vm:
@@ -50,10 +30,10 @@ wait-vm:
 
 .PHONY: copy-tkvs-server
 copy-tkvs-server: tkvs-server
-	$(ssh_with_sshpass) mkdir -p /home/ubuntu/tkvs
-	$(sshpass) rsync -ave "ssh $(ssh_options)" tkvs-server $(remote):/home/ubuntu/tkvs/tkvs-server
+	$(ssh_with_sshpass) mkdir -p /home/arch/tkvs
+	$(sshpass) scp $(ssh_options) -P $(ssh_port) tkvs-server $(remote):/home/arch/tkvs/tkvs-server
 
 .PHONY: run-tkvs-server
 run-tkvs-server:
-	$(ssh_with_sshpass) mkdir -p /home/ubuntu/tkvs/data
-	$(ssh_with_sshpass) TKVS_DATA=/home/ubuntu/tkvs/data TKVS_IP=0.0.0.0 /home/ubuntu/tkvs/tkvs-server
+	$(ssh_with_sshpass) mkdir -p /home/arch/tkvs/data
+	$(ssh_with_sshpass) TKVS_DATA=/home/arch/tkvs/data TKVS_IP=0.0.0.0 /home/arch/tkvs/tkvs-server
