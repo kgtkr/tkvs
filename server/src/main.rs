@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 use bytes::Bytes;
 use dashmap::mapref;
 use dashmap::DashMap;
