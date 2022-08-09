@@ -48,11 +48,10 @@
                 packages.tkvs-server
               ];
               pathsToLink = [ "/bin" ];
-            };
-            runAsRoot = ''
-              #!${pkgs.runtimeShell}
+              postBuild = ''
               mkdir -p /data
-            '';
+              '';
+            };
             config = {
               Env = [ "TKVS_IP=0.0.0.0" "TKVS_PORT=50051" "TKVS_DATA=/data" ];
               Entrypoint = [ "/bin/tkvs-server" ];
