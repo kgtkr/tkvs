@@ -102,7 +102,7 @@ async fn main() {
                                     .value
                                     .map(|value| String::from_utf8_lossy(value.as_slice())
                                         .to_string())
-                                    .unwrap_or("<none>".to_string())
+                                    .unwrap_or_else(|| "<none>".to_string())
                             );
                         }
                         Err(e) => {

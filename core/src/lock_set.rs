@@ -208,7 +208,7 @@ impl LockSet {
                 .or_insert_with(MaybeLock::new);
             let prev_lock = lock.clone();
             if lock.lock_read(id) {
-                if let Ok(_) = Self::check_deadlock(&lock_set.locks) {
+                if Self::check_deadlock(&lock_set.locks).is_ok() {
                     let (tx, rx) = oneshot::channel();
                     lock_set.txs.insert(id, tx);
                     Ok(Some(rx))
@@ -239,7 +239,7 @@ impl LockSet {
                 .or_insert_with(MaybeLock::new);
             let prev_lock = lock.clone();
             if lock.lock_write(id) {
-                if let Ok(_) = Self::check_deadlock(&lock_set.locks) {
+                if Self::check_deadlock(&lock_set.locks).is_ok() {
                     let (tx, rx) = oneshot::channel();
                     lock_set.txs.insert(id, tx);
                     Ok(Some(rx))
