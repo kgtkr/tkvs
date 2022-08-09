@@ -27,6 +27,12 @@
                 pkgs.protobuf
               ];
             };
+            "tkvs-client" = attrs: {
+              buildInputs = with pkgs; lib.optionals stdenv.isDarwin [
+                darwin.apple_sdk.frameworks.SystemConfiguration
+                darwin.apple_sdk.frameworks.Security
+              ];
+            };
           };
         };
         cargoNix = import ./Cargo.nix {
