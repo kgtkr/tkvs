@@ -49,13 +49,13 @@
               ];
               pathsToLink = [ "/bin" ];
               postBuild = ''
-              mkdir -p /data
+              mkdir -p /var/lib/tkvs/data
               '';
             };
             config = {
-              Env = [ "TKVS_IP=0.0.0.0" "TKVS_PORT=50051" "TKVS_DATA=/data" ];
+              Env = [ "TKVS_IP=0.0.0.0" "TKVS_PORT=50051" "TKVS_DATA=/var/lib/tkvs/data" ];
               Entrypoint = [ "/bin/tkvs-server" ];
-              Volumes = { "/data" = { }; };
+              Volumes = { "/var/lib/tkvs/data" = { }; };
             };
           };
         };
