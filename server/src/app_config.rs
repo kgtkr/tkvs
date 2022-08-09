@@ -10,7 +10,6 @@ pub struct AppConfig {
     pub port: u16,
     #[serde(default = "ip_default")]
     pub ip: IpAddr,
-    #[serde(default = "data_default")]
     pub data: String,
 }
 
@@ -26,10 +25,6 @@ fn port_default() -> u16 {
 
 fn ip_default() -> IpAddr {
     IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
-}
-
-fn data_default() -> String {
-    "data".to_string()
 }
 
 impl AppConfig {
