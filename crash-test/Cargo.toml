@@ -1,0 +1,10 @@
+[package]
+edition = "2021"
+name = "tkvs-crash-test"
+version = "0.1.0"
+
+[dependencies]
+rand = "0.8.5"
+tkvs-protos = {path = "../protos"}
+tokio = {version = "1.20.1", features = ["full"]}
+tonic = "0.8.0"

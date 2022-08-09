@@ -1145,6 +1145,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tkvs-crash-test"
+version = "0.1.0"
+dependencies = [
+ "rand",
+ "tkvs-protos",
+ "tokio",
+ "tonic",
+]
+
+[[package]]
 name = "tkvs-protos"
 version = "0.1.0"
 dependencies = [
