@@ -1,14 +1,11 @@
 [package]
+edition = "2021"
 name = "tkvs-client"
 version = "0.1.0"
-edition = "2021"
 
 [dependencies]
-clap = {version = "3.2.16", features = ["derive"]}
-tokio = {version = "1.20.1", features = ["full"]}
 anyhow = "1.0.58"
+clap = {version = "3.2.16", features = ["derive"]}
+tkvs-protos = {path = "../protos"}
+tokio = {version = "1.20.1", features = ["full"]}
 tonic = "0.8.0"
-prost = "0.11.0"
-
-[build-dependencies]
-tonic-build = "0.8"

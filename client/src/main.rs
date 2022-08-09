@@ -3,10 +3,6 @@ use std::io::Write;
 use clap::{Parser, Subcommand};
 use tokio::io::AsyncBufReadExt;
 
-mod tkvs_protos {
-    tonic::include_proto!("kgtkr.tkvs");
-}
-
 #[derive(Parser)]
 #[clap(name = "tkvs-client", author = "kgtkr")]
 struct AppArg {

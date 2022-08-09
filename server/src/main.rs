@@ -9,10 +9,7 @@ use tonic::{transport::Server, Code, Request, Response, Status};
 mod app_config;
 
 const MAX_TTL: u64 = 60;
-mod pb {
-    pub const REFLECTION_SERVICE_DESCRIPTOR: &[u8] =
-        tonic::include_file_descriptor_set!("tkvs-descriptor");
-}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -26,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let reflection = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(pb::REFLECTION_SERVICE_DESCRIPTOR)
+        .register_encoded_file_descriptor_set(tkvs_protos::REFLECTION_SERVICE_DESCRIPTOR)
         .build()
         .unwrap();
 
@@ -38,10 +35,6 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     Ok(())
-}
-
-mod tkvs_protos {
-    tonic::include_proto!("kgtkr.tkvs");
 }
 
 #[derive(Debug)]

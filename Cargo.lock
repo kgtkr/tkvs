@@ -983,10 +983,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "prost",
+ "tkvs-protos",
  "tokio",
  "tonic",
- "tonic-build",
 ]
 
 [[package]]
@@ -1006,6 +1005,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tkvs-protos"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "tkvs-server"
 version = "0.1.0"
 dependencies = [
@@ -1013,14 +1021,13 @@ dependencies = [
  "bytes",
  "clap",
  "dashmap",
- "prost",
  "rand",
  "serde",
  "serde-env",
  "tkvs-core",
+ "tkvs-protos",
  "tokio",
  "tonic",
- "tonic-build",
  "tonic-reflection",
  "tracing",
  "tracing-subscriber",
