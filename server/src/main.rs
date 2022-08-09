@@ -29,6 +29,8 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .unwrap();
 
+    tracing::info!("gRPC server is starting on {}", addr);
+
     Server::builder()
         .trace_fn(|_| tracing::info_span!("gRPC server"))
         .add_service(tkvs_protos::tkvs_server::TkvsServer::new(tkvs))

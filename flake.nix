@@ -53,7 +53,7 @@
               '';
             };
             config = {
-              Env = [ "TKVS_IP=0.0.0.0" "TKVS_PORT=50051" "TKVS_DATA=/data" ];
+              Env = [ "TKVS_IP=0.0.0.0" "TKVS_PORT=50051" "TKVS_DATA=/data" "RUST_LOG=info"];
               Entrypoint = [ "/bin/tkvs-server" ];
               Volumes = { "/data" = { }; };
             };
