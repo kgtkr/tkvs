@@ -39,19 +39,23 @@
           tkvs-client = cargoNix.workspaceMembers.tkvs-client.build;
           tkvs-server-docker = pkgs.dockerTools.buildImage {
             name = "tkvs-server";
-            contents = [
-              pkgs.coreutils
-              pkgs.bash
-              pkgs.cacert
-              packages.tkvs-server
-            ];
+            copyToRoot = pkgs.buildEnv {
+              name = "image-root";
+              paths = [
+                pkgs.coreutils
+                pkgs.bash
+                pkgs.cacert
+                packages.tkvs-server
+              ];
+              pathsToLink = [ "/bin" ];
+            };
             runAsRoot = ''
               #!${pkgs.runtimeShell}
               mkdir -p /data
             '';
             config = {
               Env = [ "TKVS_IP=0.0.0.0" "TKVS_PORT=50051" "TKVS_DATA=/data" ];
-              Entrypoint = [ "tkvs-server" ];
+              Entrypoint = [ "/bin/tkvs-server" ];
               Volumes = { "/data" = { }; };
             };
           };
