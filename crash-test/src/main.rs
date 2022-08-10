@@ -2,15 +2,19 @@
 
 use std::collections::HashMap;
 
+use base64::encode;
+use nix::sys::signal::{kill, Signal};
+use nix::unistd::Pid;
 use rand::Rng;
 use std::env;
 use std::process::abort;
 use std::sync::{Arc, Mutex};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
+use tokio::task::JoinHandle;
+use tonic::transport::Channel;
 
-#[tokio::main]
-async fn main() {
-    let mut vm = Command::new("make").arg("up-vm").spawn().unwrap();
+async fn start_vm() -> Child {
+    let vm = Command::new("make").arg("up-vm").spawn().unwrap();
     assert!(Command::new("make")
         .arg("wait-vm")
         .spawn()
@@ -19,14 +23,10 @@ async fn main() {
         .await
         .unwrap()
         .success());
-    assert!(Command::new("make")
-        .arg("reset-tkvs-server")
-        .spawn()
-        .unwrap()
-        .wait()
-        .await
-        .unwrap()
-        .success());
+    vm
+}
+
+async fn run_db() -> tkvs_protos::tkvs_client::TkvsClient<Channel> {
     assert!(Command::new("make")
         .arg("run-tkvs-server")
         .spawn()
@@ -35,20 +35,63 @@ async fn main() {
         .await
         .unwrap()
         .success());
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-    let is_kill = Arc::new(Mutex::new(false));
-    let mut client = tkvs_protos::tkvs_client::TkvsClient::connect(format!(
+
+    let client = tkvs_protos::tkvs_client::TkvsClient::connect(format!(
         "http://localhost:{}",
         env::var("grpc_port").unwrap()
     ))
     .await
     .unwrap();
-    let session_id = client
-        .start_session(tkvs_protos::StartSessionRequest {})
+
+    client
+}
+
+async fn start_session(
+    client: &mut tkvs_protos::tkvs_client::TkvsClient<Channel>,
+) -> (String, JoinHandle<()>) {
+    // サーバーが起動するまで
+    let session_id = loop {
+        if let Ok(result) = client
+            .start_session(tkvs_protos::StartSessionRequest {})
+            .await
+        {
+            break result.into_inner().session_id;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    };
+    let handle = {
+        let mut client = client.clone();
+        let session_id = session_id.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                // session busyで失敗する可能性がある
+                let _ = client
+                    .keep_alive_session(tkvs_protos::KeepAliveSessionRequest {
+                        session_id: session_id.clone(),
+                    })
+                    .await;
+            }
+        })
+    };
+    (session_id, handle)
+}
+
+#[tokio::main]
+async fn main() {
+    let mut vm = start_vm().await;
+    assert!(Command::new("make")
+        .arg("reset-tkvs-server")
+        .spawn()
+        .unwrap()
+        .wait()
         .await
         .unwrap()
-        .into_inner()
-        .session_id;
+        .success());
+    let mut client = run_db().await;
+    let is_kill = Arc::new(Mutex::new(false));
+
+    let (session_id, keep_alive_handle) = start_session(&mut client).await;
     let mut handles = Vec::new();
     {
         let mut client = client.clone();
@@ -58,6 +101,7 @@ async fn main() {
                 if *is_kill.lock().unwrap() {
                     return;
                 }
+                println!("snapshot");
                 let result = client.snapshot(tkvs_protos::SnapshotRequest {}).await;
                 if let Err(e) = result {
                     if *is_kill.lock().unwrap() {
@@ -70,26 +114,6 @@ async fn main() {
                 let dur =
                     { std::time::Duration::from_millis(rand::thread_rng().gen_range(0..1000)) };
                 tokio::time::sleep(dur).await;
-            }
-        }));
-    }
-
-    {
-        let mut client = client.clone();
-        let is_kill = is_kill.clone();
-        let session_id = session_id.clone();
-        handles.push(tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                if *is_kill.lock().unwrap() {
-                    return;
-                }
-                // session busyで失敗する可能性がある
-                let _ = client
-                    .keep_alive_session(tkvs_protos::KeepAliveSessionRequest {
-                        session_id: session_id.clone(),
-                    })
-                    .await;
             }
         }));
     }
@@ -154,7 +178,7 @@ async fn main() {
                                     .collect::<Vec<_>>()
                             };
                             uncommitted_state.insert(key.clone(), Some(value.clone()));
-                            println!("set {:?} {:?}", key, value);
+                            println!("set {} {:?}", encode(&key), encode(&value));
                             client
                                 .put(tkvs_protos::PutRequest {
                                     session_id: session_id.clone(),
@@ -166,7 +190,7 @@ async fn main() {
                         }
                         _ => {
                             uncommitted_state.insert(key.clone(), None);
-                            println!("delete {:?}", key);
+                            println!("delete {}", encode(&key));
                             client
                                 .delete(tkvs_protos::DeleteRequest {
                                     session_id: session_id.clone(),
@@ -210,13 +234,52 @@ async fn main() {
         })
     };
 
-    let dur = { std::time::Duration::from_millis(rand::thread_rng().gen_range(10..30)) };
+    let dur = { std::time::Duration::from_secs(rand::thread_rng().gen_range(10..30)) };
     tokio::time::sleep(dur).await;
     *is_kill.lock().unwrap() = true;
-    vm.start_kill().unwrap();
+    kill(Pid::from_raw(vm.id().unwrap() as i32), Signal::SIGTERM).unwrap();
+    vm.wait().await.unwrap();
+    keep_alive_handle.abort();
     for handle in handles {
         handle.await.unwrap();
     }
     let committed_states = committed_handle.await.unwrap();
-    println!("{:?}", committed_states);
+
+    // restart vm and check committed state
+    let mut vm = start_vm().await;
+    let mut client = run_db().await;
+    let (session_id, keep_alive_handle) = start_session(&mut client).await;
+    let mut test_success = false;
+    for committed_state in committed_states {
+        let mut ok = true;
+        for (key, value) in committed_state {
+            let result = client
+                .get(tkvs_protos::GetRequest {
+                    session_id: session_id.clone(),
+                    key: key.clone(),
+                })
+                .await
+                .unwrap();
+            if result.into_inner().value != value {
+                ok = false;
+                break;
+            }
+        }
+
+        if ok {
+            test_success = true;
+            break;
+        }
+    }
+
+    if test_success {
+        println!("test success");
+    } else {
+        println!("test failed");
+        abort();
+    }
+
+    kill(Pid::from_raw(vm.id().unwrap() as i32), Signal::SIGTERM).unwrap();
+    vm.wait().await.unwrap();
+    keep_alive_handle.abort();
 }

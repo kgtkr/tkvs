@@ -59,6 +59,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "tkvs-crash-test" = rec {
+      packageId = "tkvs-crash-test";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "tkvs-crash-test";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "tkvs-protos" = rec {
       packageId = "tkvs-protos";
       build = internal.buildRustCrateWithFeatures {
@@ -1560,7 +1570,7 @@ rec {
           "rustc-std-workspace-core" = [ "dep:rustc-std-workspace-core" ];
           "use_std" = [ "std" ];
         };
-        resolvedDefaultFeatures = [ "default" "std" ];
+        resolvedDefaultFeatures = [ "default" "extra_traits" "std" ];
       };
       "lock_api" = rec {
         crateName = "lock_api";
@@ -1644,6 +1654,24 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "std" ];
       };
+      "memoffset" = rec {
+        crateName = "memoffset";
+        version = "0.6.5";
+        edition = "2015";
+        sha256 = "1kkrzll58a3ayn5zdyy9i1f1v3mx0xgl29x0chq614zazba638ss";
+        authors = [
+          "Gilad Naaman <gilad.naaman@gmail.com>"
+        ];
+        buildDependencies = [
+          {
+            name = "autocfg";
+            packageId = "autocfg";
+          }
+        ];
+        features = {
+        };
+        resolvedDefaultFeatures = [ "default" ];
+      };
       "mime" = rec {
         crateName = "mime";
         version = "0.3.16";
@@ -1709,6 +1737,52 @@ rec {
           "serde" = [ "dep:serde" ];
           "serde_impl" = [ "serde" ];
         };
+      };
+      "nix" = rec {
+        crateName = "nix";
+        version = "0.24.2";
+        edition = "2018";
+        sha256 = "1z35n1bhzslr7zawy2c0fl90jjy9l5b3lnsidls3908vfk0xnp0r";
+        authors = [
+          "The nix-rust Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "bitflags";
+            packageId = "bitflags";
+          }
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+            features = [ "extra_traits" ];
+          }
+          {
+            name = "memoffset";
+            packageId = "memoffset";
+            optional = true;
+            target = { target, features }: (!(target."os" == "redox"));
+          }
+        ];
+        features = {
+          "default" = [ "acct" "aio" "dir" "env" "event" "feature" "fs" "hostname" "inotify" "ioctl" "kmod" "mman" "mount" "mqueue" "net" "personality" "poll" "process" "pthread" "ptrace" "quota" "reboot" "resource" "sched" "signal" "socket" "term" "time" "ucontext" "uio" "user" "zerocopy" ];
+          "dir" = [ "fs" ];
+          "memoffset" = [ "dep:memoffset" ];
+          "mount" = [ "uio" ];
+          "mqueue" = [ "fs" ];
+          "net" = [ "socket" ];
+          "ptrace" = [ "process" ];
+          "sched" = [ "process" ];
+          "signal" = [ "process" ];
+          "socket" = [ "memoffset" ];
+          "ucontext" = [ "signal" ];
+          "user" = [ "feature" ];
+          "zerocopy" = [ "fs" "uio" ];
+        };
+        resolvedDefaultFeatures = [ "acct" "aio" "default" "dir" "env" "event" "feature" "fs" "hostname" "inotify" "ioctl" "kmod" "memoffset" "mman" "mount" "mqueue" "net" "personality" "poll" "process" "pthread" "ptrace" "quota" "reboot" "resource" "sched" "signal" "socket" "term" "time" "ucontext" "uio" "user" "zerocopy" ];
       };
       "num_cpus" = rec {
         crateName = "num_cpus";
@@ -3247,6 +3321,43 @@ rec {
           {
             name = "tracing";
             packageId = "tracing";
+          }
+        ];
+
+      };
+      "tkvs-crash-test" = rec {
+        crateName = "tkvs-crash-test";
+        version = "0.1.0";
+        edition = "2021";
+        crateBin = [
+          { name = "tkvs-crash-test"; path = "src/main.rs"; }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crash-test; };
+        dependencies = [
+          {
+            name = "base64";
+            packageId = "base64";
+          }
+          {
+            name = "nix";
+            packageId = "nix";
+          }
+          {
+            name = "rand";
+            packageId = "rand";
+          }
+          {
+            name = "tkvs-protos";
+            packageId = "tkvs-protos";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "full" ];
+          }
+          {
+            name = "tonic";
+            packageId = "tonic";
           }
         ];
 
