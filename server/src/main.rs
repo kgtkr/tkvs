@@ -26,7 +26,17 @@ async fn main() -> anyhow::Result<()> {
         db: DB::new(config.data.into()).unwrap(),
     };
 
-    // TODO:sessions expire check
+    // sessions expire check
+    tokio::spawn(async move {
+        loop {
+            {
+                let mut sessions = tkvs.sessions.lock().unwrap();
+                let now = Instant::now();
+                sessions.retain(|_, session| session.expire > now);
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    });
 
     let reflection = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(tkvs_protos::REFLECTION_SERVICE_DESCRIPTOR)
