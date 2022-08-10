@@ -1,6 +1,7 @@
 #![deny(warnings)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::encode;
 use nix::sys::signal::{kill, Signal};
@@ -8,7 +9,7 @@ use nix::unistd::Pid;
 use rand::Rng;
 use std::env;
 use std::process::abort;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tonic::transport::Channel;
@@ -48,6 +49,7 @@ async fn run_db() -> tkvs_protos::tkvs_client::TkvsClient<Channel> {
 
 async fn start_session(
     client: &mut tkvs_protos::tkvs_client::TkvsClient<Channel>,
+    canceled: Arc<AtomicBool>,
 ) -> (String, JoinHandle<()>) {
     // サーバーが起動するまで
     let session_id = loop {
@@ -65,6 +67,9 @@ async fn start_session(
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                if canceled.load(Ordering::SeqCst) {
+                    break;
+                }
                 // session busyで失敗する可能性がある
                 let _ = client
                     .keep_alive_session(tkvs_protos::KeepAliveSessionRequest {
@@ -89,22 +94,24 @@ async fn main() {
         .unwrap()
         .success());
     let mut client = run_db().await;
-    let is_kill = Arc::new(Mutex::new(false));
+    let canceled = Arc::new(AtomicBool::new(false));
 
-    let (session_id, keep_alive_handle) = start_session(&mut client).await;
     let mut handles = Vec::new();
+
+    let (session_id, handle) = start_session(&mut client, canceled.clone()).await;
+    handles.push(handle);
     {
         let mut client = client.clone();
-        let is_kill = is_kill.clone();
+        let canceled = canceled.clone();
         handles.push(tokio::spawn(async move {
             loop {
-                if *is_kill.lock().unwrap() {
+                if canceled.load(Ordering::SeqCst) {
                     return;
                 }
                 println!("snapshot");
                 let result = client.snapshot(tkvs_protos::SnapshotRequest {}).await;
                 if let Err(e) = result {
-                    if *is_kill.lock().unwrap() {
+                    if canceled.load(Ordering::SeqCst) {
                         return;
                     } else {
                         eprintln!("{}", e);
@@ -120,12 +127,12 @@ async fn main() {
 
     let committed_handle = {
         let mut client = client.clone();
-        let is_kill = is_kill.clone();
+        let canceled = canceled.clone();
         let session_id = session_id.clone();
         tokio::spawn(async move {
             let mut committed_state = HashMap::<Vec<u8>, Option<Vec<u8>>>::new();
             loop {
-                if *is_kill.lock().unwrap() {
+                if canceled.load(Ordering::SeqCst) {
                     return vec![committed_state];
                 }
 
@@ -178,7 +185,7 @@ async fn main() {
                                     .collect::<Vec<_>>()
                             };
                             uncommitted_state.insert(key.clone(), Some(value.clone()));
-                            println!("set {} {:?}", encode(&key), encode(&value));
+                            println!("set {} {}", encode(&key), encode(&value));
                             client
                                 .put(tkvs_protos::PutRequest {
                                     session_id: session_id.clone(),
@@ -202,7 +209,7 @@ async fn main() {
                     };
 
                     if let Err(e) = op_result {
-                        if *is_kill.lock().unwrap() {
+                        if canceled.load(Ordering::SeqCst) {
                             return vec![committed_state];
                         } else {
                             eprintln!("{}", e);
@@ -218,7 +225,7 @@ async fn main() {
                     })
                     .await;
                 if let Err(e) = result {
-                    if *is_kill.lock().unwrap() {
+                    if canceled.load(Ordering::SeqCst) {
                         // コミットがエラーになった場合は適用されていてもされていなくても正常
                         return vec![committed_state.clone(), {
                             committed_state.extend(uncommitted_state);
@@ -236,10 +243,9 @@ async fn main() {
 
     let dur = { std::time::Duration::from_secs(rand::thread_rng().gen_range(10..30)) };
     tokio::time::sleep(dur).await;
-    *is_kill.lock().unwrap() = true;
+    canceled.store(true, Ordering::SeqCst);
     kill(Pid::from_raw(vm.id().unwrap() as i32), Signal::SIGTERM).unwrap();
     vm.wait().await.unwrap();
-    keep_alive_handle.abort();
     for handle in handles {
         handle.await.unwrap();
     }
@@ -248,7 +254,8 @@ async fn main() {
     // restart vm and check committed state
     let mut vm = start_vm().await;
     let mut client = run_db().await;
-    let (session_id, keep_alive_handle) = start_session(&mut client).await;
+    let canceled = Arc::new(AtomicBool::new(false));
+    let (session_id, handle) = start_session(&mut client, canceled.clone()).await;
     let mut test_success = false;
     for committed_state in committed_states {
         let mut ok = true;
@@ -279,7 +286,9 @@ async fn main() {
         abort();
     }
 
+    canceled.store(true, Ordering::SeqCst);
+    handle.await.unwrap();
+
     kill(Pid::from_raw(vm.id().unwrap() as i32), Signal::SIGTERM).unwrap();
     vm.wait().await.unwrap();
-    keep_alive_handle.abort();
 }

@@ -26,13 +26,13 @@ clean-vm:
 
 .PHONY: up-vm
 up-vm: disk.qcow2
-	qemu-system-x86_64 -m 512 \
+	qemu-system-x86_64 -m 1024 -smp 4 \
 		-drive file=disk.qcow2,if=virtio \
 		-net nic -net user,hostfwd=tcp::$(ssh_port)-:22,hostfwd=tcp::$(grpc_port)-:50051
 
 .PHONY: wait-vm
 wait-vm:
-	while true; do sleep 10; if $(ssh_with_sshpass) echo; then break; fi; done
+	while true; do sleep 2; if $(ssh_with_sshpass) echo; then break; fi; done
 
 .PHONY: reset-tkvs-server
 reset-tkvs-server: tkvs-server
