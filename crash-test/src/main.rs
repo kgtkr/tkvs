@@ -16,6 +16,7 @@ use tonic::transport::Channel;
 
 async fn start_vm() -> Child {
     let vm = Command::new("make").arg("up-vm").spawn().unwrap();
+    println!("waiting for vm to start");
     assert!(Command::new("make")
         .arg("wait-vm")
         .spawn()
@@ -45,6 +46,7 @@ async fn start_session(
     canceled: Arc<AtomicBool>,
 ) -> (String, JoinHandle<()>) {
     // サーバーが起動するまで
+    println!("waiting for server to start");
     let session_id = loop {
         if let Ok(result) = client
             .start_session(tkvs_protos::StartSessionRequest {})
