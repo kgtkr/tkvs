@@ -124,5 +124,6 @@ jobs:
       - name: Run crash test
         run: |
           make runN
+        timeout-minutes: 15
         working-directory: ./crash-test
 
