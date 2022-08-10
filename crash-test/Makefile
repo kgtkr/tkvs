@@ -46,4 +46,4 @@ reset-tkvs-server: tkvs-server
 
 .PHONY: run-tkvs-server
 run-tkvs-server:
-	$(ssh_with_sshpass) "TKVS_DATA=/home/arch/tkvs/data TKVS_IP=0.0.0.0 nohup /home/arch/tkvs/tkvs-server >/dev/null 2>&1 &"
+	$(ssh_with_sshpass) "TKVS_DATA=/home/arch/tkvs/data TKVS_IP=0.0.0.0 /home/arch/tkvs/tkvs-server"

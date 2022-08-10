@@ -28,14 +28,7 @@ async fn start_vm() -> Child {
 }
 
 async fn run_db() -> tkvs_protos::tkvs_client::TkvsClient<Channel> {
-    assert!(Command::new("make")
-        .arg("run-tkvs-server")
-        .spawn()
-        .unwrap()
-        .wait()
-        .await
-        .unwrap()
-        .success());
+    Command::new("make").arg("run-tkvs-server").spawn().unwrap();
 
     let client = tkvs_protos::tkvs_client::TkvsClient::connect(format!(
         "http://localhost:{}",
