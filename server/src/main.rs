@@ -27,16 +27,19 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // sessions expire check
-    tokio::spawn(async move {
-        loop {
-            {
-                let mut sessions = tkvs.sessions.lock().unwrap();
-                let now = Instant::now();
-                sessions.retain(|_, session| session.expire > now);
+    {
+        let sessions = tkvs.sessions.clone();
+        tokio::spawn(async move {
+            loop {
+                {
+                    let mut sessions = sessions.lock().unwrap();
+                    let now = Instant::now();
+                    sessions.retain(|_, session| session.expire > now);
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
-    });
+        });
+    }
 
     let reflection = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(tkvs_protos::REFLECTION_SERVICE_DESCRIPTOR)
