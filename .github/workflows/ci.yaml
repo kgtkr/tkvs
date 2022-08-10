@@ -123,7 +123,7 @@ jobs:
             crash-test-cargo-home-20220811-1-
       - name: Run crash test
         run: |
-          make runN
+          make run
         timeout-minutes: 15
         working-directory: ./crash-test
 
