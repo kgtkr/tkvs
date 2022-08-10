@@ -5,8 +5,10 @@ use dashmap::mapref;
 use dashmap::DashMap;
 use rand::{distributions::Alphanumeric, Rng};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Instant;
 use tkvs_core::{Trx, DB};
+use tokio::sync::Mutex;
 use tonic::{transport::Server, Code, Request, Response, Status};
 mod app_config;
 
@@ -23,6 +25,8 @@ async fn main() -> anyhow::Result<()> {
         sessions: DashMap::new(),
         db: DB::new(config.data.into()).unwrap(),
     };
+
+    // TODO:sessions expire check
 
     let reflection = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(tkvs_protos::REFLECTION_SERVICE_DESCRIPTOR)
@@ -43,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
 
 #[derive(Debug)]
 struct Session {
-    trx: Trx,
+    trx: Arc<Mutex<Trx>>,
     expire: Instant,
 }
 
@@ -59,21 +63,28 @@ struct TkvsService {
     db: DB,
 }
 
+fn session_busy_status() -> Status {
+    Status::new(Code::Unavailable, "session is busy".to_string())
+}
+
 impl TkvsService {
-    fn get_session_entry(
-        &self,
-        session_id: String,
-    ) -> Result<mapref::entry::Entry<String, Session>, Status> {
-        self.sessions
-            .try_entry(session_id)
-            .ok_or_else(|| Status::new(Code::Unavailable, "session is busy".to_string()))
+    fn get_trx(&self, session_id: &str) -> Result<Arc<Mutex<Trx>>, Status> {
+        let session = self.get_session(session_id.to_string())?;
+        let trx = session.get().trx.clone();
+
+        Ok(trx)
+    }
+
+    fn remove_session(&self, session_id: &str) -> Result<(), Status> {
+        self.get_session(session_id.to_string())?.remove();
+        Ok(())
     }
 
     fn get_session(
         &self,
         session_id: String,
     ) -> Result<mapref::entry::OccupiedEntry<String, Session>, Status> {
-        match self.get_session_entry(session_id)? {
+        match self.sessions.entry(session_id) {
             mapref::entry::Entry::Occupied(entry) => Ok(entry),
             mapref::entry::Entry::Vacant(_) => Err(Status::new(
                 Code::NotFound,
@@ -98,7 +109,7 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         };
         let trx = self.db.new_trx().await;
         let session = Session {
-            trx,
+            trx: Arc::new(Mutex::new(trx)),
             expire: Instant::now() + std::time::Duration::from_secs(MAX_TTL),
         };
         self.sessions.insert(session_id.clone(), session);
@@ -115,8 +126,7 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         request: Request<tkvs_protos::EndSessionRequest>,
     ) -> Result<Response<tkvs_protos::EndSessionResponse>, Status> {
         let message = request.into_inner();
-        let session = self.get_session(message.session_id)?;
-        session.remove();
+        self.remove_session(message.session_id.as_str())?;
         let response = tkvs_protos::EndSessionResponse {};
         Ok(Response::new(response))
     }
@@ -140,14 +150,12 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         request: Request<tkvs_protos::GetRequest>,
     ) -> Result<Response<tkvs_protos::GetResponse>, Status> {
         let message = request.into_inner();
-        let mut session = self.get_session(message.session_id)?;
-        let session = session.get_mut();
-        let trx = &mut session.trx;
+        let trx = self.get_trx(message.session_id.as_str())?;
+        let mut trx = trx.try_lock().map_err(|_| session_busy_status())?;
         let value = trx
             .get(&Bytes::from(message.key))
             .await
             .map_err(|e| Status::new(Code::Aborted, e.to_string()))?;
-        session.update_expire();
         let response = tkvs_protos::GetResponse {
             value: value.map(|b| Vec::from(&b[..])),
         };
@@ -160,13 +168,11 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         request: Request<tkvs_protos::PutRequest>,
     ) -> Result<Response<tkvs_protos::PutResponse>, Status> {
         let message = request.into_inner();
-        let mut session = self.get_session(message.session_id)?;
-        let session = session.get_mut();
-        let trx = &mut session.trx;
+        let trx = self.get_trx(message.session_id.as_str())?;
+        let mut trx = trx.try_lock().map_err(|_| session_busy_status())?;
         trx.put(Bytes::from(message.key), Bytes::from(message.value))
             .await
             .map_err(|e| Status::new(Code::Aborted, e.to_string()))?;
-        session.update_expire();
         let response = tkvs_protos::PutResponse {};
         Ok(Response::new(response))
     }
@@ -177,13 +183,11 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         request: Request<tkvs_protos::DeleteRequest>,
     ) -> Result<Response<tkvs_protos::DeleteResponse>, Status> {
         let message = request.into_inner();
-        let mut session = self.get_session(message.session_id)?;
-        let session = session.get_mut();
-        let trx = &mut session.trx;
+        let trx = self.get_trx(message.session_id.as_str())?;
+        let mut trx = trx.try_lock().map_err(|_| session_busy_status())?;
         trx.delete(Bytes::from(message.key))
             .await
             .map_err(|e| Status::new(Code::Aborted, e.to_string()))?;
-        session.update_expire();
         let response = tkvs_protos::DeleteResponse {};
         Ok(Response::new(response))
     }
@@ -194,13 +198,11 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         request: Request<tkvs_protos::CommitRequest>,
     ) -> Result<Response<tkvs_protos::CommitResponse>, Status> {
         let message = request.into_inner();
-        let mut session = self.get_session(message.session_id)?;
-        let session = session.get_mut();
-        let trx = &mut session.trx;
+        let trx = self.get_trx(message.session_id.as_str())?;
+        let mut trx = trx.try_lock().map_err(|_| session_busy_status())?;
         trx.commit()
             .await
             .map_err(|e| Status::new(Code::Aborted, e.to_string()))?;
-        session.update_expire();
         let response = tkvs_protos::CommitResponse {};
         Ok(Response::new(response))
     }
@@ -211,11 +213,9 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         request: Request<tkvs_protos::AbortRequest>,
     ) -> Result<Response<tkvs_protos::AbortResponse>, Status> {
         let message = request.into_inner();
-        let mut session = self.get_session(message.session_id)?;
-        let session = session.get_mut();
-        let trx = &mut session.trx;
+        let trx = self.get_trx(message.session_id.as_str())?;
+        let mut trx = trx.try_lock().map_err(|_| session_busy_status())?;
         trx.abort().await;
-        session.update_expire();
         let response = tkvs_protos::AbortResponse {};
         Ok(Response::new(response))
     }
