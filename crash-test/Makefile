@@ -10,6 +10,10 @@ grpc_port=17051
 run:
 	cargo run
 
+.PHONY: runN
+runN:
+	set -e && for i in `seq 1 10`; do echo ===========loop$$i; make run; done
+
 .PHONY: tkvs-server
 tkvs-server:
 	cd .. && nix develop .#x86_64-linux-cross -c cargo build --target x86_64-unknown-linux-musl && cp target/x86_64-unknown-linux-musl/debug/tkvs-server crash-test/tkvs-server
@@ -26,7 +30,7 @@ clean-vm:
 
 .PHONY: up-vm
 up-vm: disk.qcow2
-	qemu-system-x86_64 -m 1024 -smp 4 \
+	qemu-system-x86_64 -m 1024 -smp 10 \
 		-drive file=disk.qcow2,if=virtio \
 		-net nic -net user,hostfwd=tcp::$(ssh_port)-:22,hostfwd=tcp::$(grpc_port)-:50051
 
