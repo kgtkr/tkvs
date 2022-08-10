@@ -3265,6 +3265,10 @@ rec {
             features = [ "derive" ];
           }
           {
+            name = "nix";
+            packageId = "nix";
+          }
+          {
             name = "rand";
             packageId = "rand";
           }

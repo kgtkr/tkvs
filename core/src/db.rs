@@ -2,6 +2,7 @@ use super::atomic_append;
 use super::lock_set::LockSet;
 use anyhow::Context;
 use bytes::Bytes;
+use nix::sys::stat::Mode;
 use std::collections::BTreeMap;
 
 use std::fs::File;
@@ -10,8 +11,10 @@ use std::fs::OpenOptions;
 use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::Write;
+use std::os::unix::prelude::RawFd;
 use std::path::PathBuf;
 
+use nix::fcntl::{flock, open, FlockArg, OFlag};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
@@ -37,6 +40,7 @@ struct DBInner {
     logs_file: File,
     trx_count: usize,
     lock_set: LockSet,
+    lock_file: RawFd,
 }
 
 #[derive(Clone, Debug)]
@@ -146,6 +150,14 @@ enum DBMessage {
 
 impl DB {
     pub fn new(data_dir: PathBuf) -> anyhow::Result<Self> {
+        let lock_file = open(
+            &data_dir.join(".lock"),
+            OFlag::O_RDWR | OFlag::O_CREAT,
+            Mode::S_IRUSR | Mode::S_IWUSR,
+        )
+        .context("failed to open lock file")?;
+        flock(lock_file, FlockArg::LockExclusiveNonblock).context("failed to lock")?;
+
         // とりあえずbincodeを使う
         let values = {
             match File::open(data_dir.join("data")) {
@@ -208,6 +220,7 @@ impl DB {
                 logs_file,
                 trx_count: 0,
                 lock_set: LockSet::new(),
+                lock_file,
             };
             while let Some(msg) = rx.recv().await {
                 match msg {
@@ -304,6 +317,13 @@ impl DB {
         let (tx, rx) = oneshot::channel();
         self.0.send(DBMessage::NewTrx { resp: tx }).await.unwrap();
         rx.await.unwrap()
+    }
+}
+
+impl Drop for DBInner {
+    fn drop(&mut self) {
+        // unlock lockfile
+        flock(self.lock_file, FlockArg::Unlock).unwrap();
     }
 }
 

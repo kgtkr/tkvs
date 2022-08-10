@@ -1145,6 +1145,7 @@ dependencies = [
  "bincode",
  "bytes",
  "clap",
+ "nix",
  "rand",
  "serde",
  "sha2",
