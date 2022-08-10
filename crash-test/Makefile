@@ -30,7 +30,7 @@ clean-vm:
 
 .PHONY: up-vm
 up-vm: disk.qcow2
-	qemu-system-x86_64 -m 1024 -smp 10 \
+	qemu-system-x86_64 -m 1024 -smp 10 -nographic \
 		-drive file=disk.qcow2,if=virtio \
 		-net nic -net user,hostfwd=tcp::$(ssh_port)-:22,hostfwd=tcp::$(grpc_port)-:50051
 
