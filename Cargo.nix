@@ -791,38 +791,6 @@ rec {
         };
         resolvedDefaultFeatures = [ "std" ];
       };
-      "dashmap" = rec {
-        crateName = "dashmap";
-        version = "5.3.4";
-        edition = "2018";
-        sha256 = "13s4rdgb2rkavsgzjks23zb0zviz7x2g8fb4jwc2xkqwkhn9359l";
-        authors = [
-          "Acrimon <joel.wejdenstal@gmail.com>"
-        ];
-        dependencies = [
-          {
-            name = "cfg-if";
-            packageId = "cfg-if";
-          }
-          {
-            name = "hashbrown";
-            packageId = "hashbrown";
-            usesDefaultFeatures = false;
-          }
-          {
-            name = "lock_api";
-            packageId = "lock_api";
-          }
-          {
-            name = "parking_lot_core";
-            packageId = "parking_lot_core";
-          }
-        ];
-        features = {
-          "rayon" = [ "dep:rayon" ];
-          "serde" = [ "dep:serde" ];
-        };
-      };
       "digest" = rec {
         crateName = "digest";
         version = "0.10.3";
@@ -3406,10 +3374,6 @@ rec {
             name = "clap";
             packageId = "clap";
             features = [ "derive" ];
-          }
-          {
-            name = "dashmap";
-            packageId = "dashmap";
           }
           {
             name = "rand";

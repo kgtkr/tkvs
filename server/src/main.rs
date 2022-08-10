@@ -1,14 +1,14 @@
 #![deny(warnings)]
 
 use bytes::Bytes;
-use dashmap::mapref;
-use dashmap::DashMap;
 use rand::{distributions::Alphanumeric, Rng};
-use std::net::SocketAddr;
+use std::collections::hash_map::{Entry, OccupiedEntry};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
+use std::{net::SocketAddr, sync::Mutex};
 use tkvs_core::{Trx, DB};
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as TokioMutex;
 use tonic::{transport::Server, Code, Request, Response, Status};
 mod app_config;
 
@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = SocketAddr::new(config.ip, config.port);
     let tkvs = TkvsService {
-        sessions: DashMap::new(),
+        sessions: Arc::new(Mutex::new(HashMap::new())),
         db: DB::new(config.data.into()).unwrap(),
     };
 
@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
 
 #[derive(Debug)]
 struct Session {
-    trx: Arc<Mutex<Trx>>,
+    trx: Arc<TokioMutex<Trx>>,
     expire: Instant,
 }
 
@@ -59,7 +59,7 @@ impl Session {
 
 #[derive(Debug)]
 struct TkvsService {
-    sessions: DashMap<String, Session>,
+    sessions: Arc<Mutex<HashMap<String, Session>>>,
     db: DB,
 }
 
@@ -68,29 +68,31 @@ fn session_busy_status() -> Status {
 }
 
 impl TkvsService {
-    fn get_trx(&self, session_id: &str) -> Result<Arc<Mutex<Trx>>, Status> {
-        let session = self.get_session(session_id.to_string())?;
-        let trx = session.get().trx.clone();
+    fn get_trx(&self, session_id: &str) -> Result<Arc<TokioMutex<Trx>>, Status> {
+        let trx = self.session_with(session_id.to_string(), |session| session.get().trx.clone())?;
 
         Ok(trx)
     }
 
     fn remove_session(&self, session_id: &str) -> Result<(), Status> {
-        self.get_session(session_id.to_string())?.remove();
+        self.session_with(session_id.to_string(), |session| session.remove())?;
         Ok(())
     }
 
-    fn get_session(
+    fn session_with<A>(
         &self,
         session_id: String,
-    ) -> Result<mapref::entry::OccupiedEntry<String, Session>, Status> {
-        match self.sessions.entry(session_id) {
-            mapref::entry::Entry::Occupied(entry) => Ok(entry),
-            mapref::entry::Entry::Vacant(_) => Err(Status::new(
+        f: impl FnOnce(OccupiedEntry<String, Session>) -> A,
+    ) -> Result<A, Status> {
+        let mut sessions = self.sessions.lock().unwrap();
+        let session_entry = match sessions.entry(session_id) {
+            Entry::Occupied(entry) => Ok(entry),
+            Entry::Vacant(_) => Err(Status::new(
                 Code::NotFound,
                 "session is not found".to_string(),
             )),
-        }
+        }?;
+        Ok(f(session_entry))
     }
 }
 
@@ -109,10 +111,14 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         };
         let trx = self.db.new_trx().await;
         let session = Session {
-            trx: Arc::new(Mutex::new(trx)),
+            trx: Arc::new(TokioMutex::new(trx)),
             expire: Instant::now() + std::time::Duration::from_secs(MAX_TTL),
         };
-        self.sessions.insert(session_id.clone(), session);
+        {
+            let mut sessions = self.sessions.lock().unwrap();
+            sessions.insert(session_id.clone(), session);
+            drop(sessions);
+        }
         let response = tkvs_protos::StartSessionResponse {
             session_id,
             ttl: MAX_TTL,
@@ -137,9 +143,9 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
         request: Request<tkvs_protos::KeepAliveSessionRequest>,
     ) -> Result<Response<tkvs_protos::KeepAliveSessionResponse>, Status> {
         let message = request.into_inner();
-        let mut session = self.get_session(message.session_id)?;
-        let session = session.get_mut();
-        session.update_expire();
+        self.session_with(message.session_id, |mut session| {
+            session.get_mut().update_expire()
+        })?;
         let response = tkvs_protos::KeepAliveSessionResponse { ttl: MAX_TTL };
         Ok(Response::new(response))
     }

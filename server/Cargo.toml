@@ -9,7 +9,6 @@ version = "0.1.0"
 anyhow = "1.0.59"
 bytes = "1.2.1"
 clap = {version = "3.2.16", features = ["derive"]}
-dashmap = "5.3.4"
 rand = "0.8.5"
 serde = "1.0.137"
 serde-env = "0.0.3"
