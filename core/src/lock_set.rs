@@ -40,11 +40,7 @@ impl MaybeLock {
         match self {
             MaybeLock::Unlocked => {
                 *self = MaybeLock::Locked(Lock {
-                    current_lock: CurrentLock::Read({
-                        let mut set = HashSet::new();
-                        set.insert(id);
-                        set
-                    }),
+                    current_lock: CurrentLock::Read(HashSet::from([id])),
                     writers: VecDeque::new(),
                     readers: HashSet::new(),
                 });
