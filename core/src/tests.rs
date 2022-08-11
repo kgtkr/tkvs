@@ -1,7 +1,7 @@
 use bytes::Bytes;
 
 use crate::DB;
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 fn create_random_dir() -> PathBuf {
     use rand::distributions::Alphanumeric;
@@ -120,7 +120,7 @@ async fn durability_test() {
 }
 
 #[tokio::test]
-async fn isolation_by_record_test() {
+async fn isolation_by_lock_test() {
     let data_dir = create_random_dir();
     let db = DB::new(data_dir).unwrap();
     let mut trx1 = db.new_trx().await;
@@ -155,4 +155,69 @@ async fn isolation_by_record_test() {
 
     let key1_result = trx1.get(&key1).await.unwrap();
     assert_eq!(key1_result, Some(value1.clone()));
+}
+
+#[tokio::test]
+async fn isolation_phantom_read_test() {
+    let data_dir = create_random_dir();
+    let db = DB::new(data_dir).unwrap();
+    let mut trx1 = db.new_trx().await;
+    let mut trx2 = db.new_trx().await;
+    let key_a = Bytes::from(b"a".as_slice());
+    let key_z = Bytes::from(b"z".as_slice());
+    let key1 = Bytes::from(b"k1".as_slice());
+    let value1 = Bytes::from(b"v1".as_slice());
+
+    let range_result = trx1.range(&key_a..=&key_z).await.unwrap();
+    assert_eq!(range_result, BTreeMap::new());
+
+    trx2.put(key1.clone(), value1.clone()).await.unwrap();
+    trx2.commit().await.unwrap();
+
+    let range_result = trx1.range(&key_a..=&key_z).await.unwrap();
+    assert_eq!(
+        range_result,
+        BTreeMap::from_iter([(key1.clone(), value1.clone())])
+    );
+
+    assert_eq!(
+        trx1.commit().await.unwrap_err().to_string(),
+        "serializable error"
+    );
+}
+
+#[tokio::test]
+async fn deadlock_detect_test() {
+    let data_dir = create_random_dir();
+    let db = DB::new(data_dir).unwrap();
+    let mut trx1 = db.new_trx().await;
+    let mut trx2 = db.new_trx().await;
+
+    let key1 = Bytes::from(b"k1".as_slice());
+    let value1 = Bytes::from(b"v1".as_slice());
+    let key2 = Bytes::from(b"k2".as_slice());
+    let value2 = Bytes::from(b"v2".as_slice());
+
+    trx1.get(&key1).await.unwrap();
+    trx2.get(&key2).await.unwrap();
+
+    let join_handle = tokio::spawn(async move {
+        trx1.put(key2.clone(), value2.clone()).await.unwrap();
+    });
+
+    for _ in 0..1000 {
+        tokio::task::yield_now().await;
+    }
+
+    assert_eq!(join_handle.is_finished(), false,);
+
+    let put_result = trx2.put(key1.clone(), value1.clone()).await;
+    assert_eq!(put_result.unwrap_err().to_string(), "Deadlock detected");
+    trx2.abort().await;
+
+    for _ in 0..1000 {
+        tokio::task::yield_now().await;
+    }
+
+    assert_eq!(join_handle.is_finished(), true);
 }
