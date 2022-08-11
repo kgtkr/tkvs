@@ -37,6 +37,11 @@ jobs:
         with:
           path: crash-test/image.qcow2
           key: crash-test-image-20220812-1-${{ hashFiles('crash-test/image-url') }}
+      - name: up-vm test
+        run: |
+          make up-vm
+        timeout-minutes: 5
+        working-directory: ./crash-test
       - name: Run crash test
         run: |
           make run
