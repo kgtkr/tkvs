@@ -8,6 +8,7 @@ service Tkvs {
   rpc EndSession(EndSessionRequest) returns (EndSessionResponse) {}
   rpc KeepAliveSession(KeepAliveSessionRequest) returns (KeepAliveSessionResponse) {}
   rpc Get(GetRequest) returns (GetResponse) {}
+  rpc Range(RangeRequest) returns (RangeResponse) {}
   rpc Put(PutRequest) returns (PutResponse) {}
   rpc Delete(DeleteRequest) returns (DeleteResponse) {}
   rpc Commit(CommitRequest) returns (CommitResponse) {}
@@ -47,6 +48,28 @@ message GetRequest {
 
 message GetResponse {
   google.protobuf.BytesValue value = 1;
+}
+
+message RangeRequest {
+  string session_id = 1;
+  Bound start = 2;
+  Bound end = 3;
+}
+
+message Bound {
+  oneof bound {
+    bytes inclusive = 1;
+    bytes exclusive = 2;
+  };
+}
+
+message RangeResponse {
+  repeated KeyValue key_values = 1;
+}
+
+message KeyValue {
+  bytes key = 1;
+  bytes value = 2;
 }
 
 message PutRequest {

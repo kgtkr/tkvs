@@ -66,6 +66,22 @@ static EMPTY_BYTES: Lazy<Bytes> = Lazy::new(|| Bytes::new());
 #[derive(Debug, Clone, Into, From)]
 pub struct BytesRange(ops::Range<RangeElement>);
 
+impl BytesRange {
+    pub fn from_bounds<R: ops::RangeBounds<Bytes>>(range: R) -> Self {
+        let start = match range.start_bound() {
+            ops::Bound::Included(v) => RangeElement::Value(v.clone()),
+            ops::Bound::Excluded(v) => RangeElement::NegInfSuffix(v.clone()),
+            ops::Bound::Unbounded => RangeElement::min(),
+        };
+        let end = match range.end_bound() {
+            ops::Bound::Included(v) => RangeElement::NegInfSuffix(v.clone()),
+            ops::Bound::Excluded(v) => RangeElement::Value(v.clone()),
+            ops::Bound::Unbounded => RangeElement::max(),
+        };
+        BytesRange(start..end)
+    }
+}
+
 impl ops::RangeBounds<Bytes> for BytesRange {
     fn start_bound(&self) -> ops::Bound<&Bytes> {
         match &self.0.start {

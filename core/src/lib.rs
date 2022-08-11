@@ -6,4 +6,3 @@ mod db;
 mod lock_set;
 mod range_element;
 pub use db::{Trx, DB};
-pub use range_element::{BytesRange, RangeElement};

@@ -4,6 +4,7 @@ use bytes::Bytes;
 use rand::{distributions::Alphanumeric, Rng};
 use std::collections::hash_map::{Entry, OccupiedEntry};
 use std::collections::HashMap;
+use std::ops::Bound;
 use std::sync::Arc;
 use std::time::Instant;
 use std::{net::SocketAddr, sync::Mutex};
@@ -177,6 +178,45 @@ impl tkvs_protos::tkvs_server::Tkvs for TkvsService {
             .map_err(|e| Status::new(Code::Aborted, e.to_string()))?;
         let response = tkvs_protos::GetResponse {
             value: value.map(|b| Vec::from(&b[..])),
+        };
+        Ok(Response::new(response))
+    }
+
+    #[tracing::instrument]
+    async fn range(
+        &self,
+        request: Request<tkvs_protos::RangeRequest>,
+    ) -> Result<Response<tkvs_protos::RangeResponse>, Status> {
+        fn bound_convert(bound: Option<tkvs_protos::bound::Bound>) -> Bound<Bytes> {
+            match bound {
+                Some(tkvs_protos::bound::Bound::Inclusive(key)) => {
+                    Bound::Included(Bytes::from(key))
+                }
+                Some(tkvs_protos::bound::Bound::Exclusive(key)) => {
+                    Bound::Excluded(Bytes::from(key))
+                }
+                None => Bound::Unbounded,
+            }
+        }
+
+        let message = request.into_inner();
+        let trx = self.get_trx(message.session_id.as_str())?;
+        let mut trx = trx.try_lock().map_err(|_| session_busy_status())?;
+        let start = bound_convert(message.start.and_then(|bound| bound.bound));
+        let end = bound_convert(message.end.and_then(|bound| bound.bound));
+
+        let value = trx
+            .range((start, end))
+            .await
+            .map_err(|e| Status::new(Code::Aborted, e.to_string()))?;
+        let response = tkvs_protos::RangeResponse {
+            key_values: value
+                .into_iter()
+                .map(|(k, v)| tkvs_protos::KeyValue {
+                    key: k.to_vec(),
+                    value: v.to_vec(),
+                })
+                .collect(),
         };
         Ok(Response::new(response))
     }

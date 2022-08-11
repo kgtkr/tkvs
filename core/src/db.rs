@@ -1,5 +1,4 @@
 use crate::range_element::BytesRange;
-use crate::RangeElement;
 
 use super::atomic_append;
 use super::lock_set::LockSet;
@@ -15,6 +14,7 @@ use std::fs::OpenOptions;
 use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::Write;
+use std::ops;
 use std::os::unix::prelude::RawFd;
 use std::path::PathBuf;
 
@@ -69,16 +69,19 @@ impl Drop for Trx {
 impl Trx {
     pub async fn get(&mut self, key: &Key) -> anyhow::Result<Option<Value>> {
         Ok(self
-            .range(BytesRange::from(
-                RangeElement::Value(key.clone())..RangeElement::NegInfSuffix(key.clone()),
-            ))
+            .range(key.clone()..=key.clone())
             .await?
             .into_values()
             .next())
     }
 
-    pub async fn range(&mut self, range: BytesRange) -> anyhow::Result<BTreeMap<Key, Value>> {
+    pub async fn range<R: ops::RangeBounds<Key>>(
+        &mut self,
+        range: R,
+    ) -> anyhow::Result<BTreeMap<Key, Value>> {
         let (tx, rx) = oneshot::channel();
+
+        let range = BytesRange::from_bounds(range);
 
         self.db
             .0
