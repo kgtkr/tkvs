@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -181,7 +182,7 @@ impl MaybeLock {
 #[derive(Debug)]
 struct LockSetState {
     locks: HashMap<RecordKey, MaybeLock>,
-    txs: HashMap<TrxId, oneshot::Sender<()>>,
+    txs: HashMap<(RecordKey, TrxId), oneshot::Sender<()>>,
 }
 
 #[derive(Clone, Debug)]
@@ -195,30 +196,54 @@ impl LockSet {
         })))
     }
 
-    pub async fn lock_read(&self, key: RecordKey, id: TrxId) -> anyhow::Result<()> {
-        let rx = {
+    pub async fn lock_read(&self, keys: BTreeSet<RecordKey>, id: TrxId) -> anyhow::Result<()> {
+        let rxs = {
             let mut lock_set = self.0.lock().unwrap();
-            let lock = lock_set
-                .locks
-                .entry(key.clone())
-                .or_insert_with(MaybeLock::new);
-            let prev_lock = lock.clone();
-            if lock.lock_read(id) {
+            let lock_results = keys
+                .iter()
+                .cloned()
+                .map(|key| {
+                    let lock = lock_set
+                        .locks
+                        .entry(key.clone())
+                        .or_insert_with(MaybeLock::new);
+                    let prev_lock = lock.clone();
+                    (lock.lock_read(id), (key, prev_lock))
+                })
+                .collect::<Vec<_>>();
+            let lock_require_keys = lock_results
+                .iter()
+                .filter(|(lock_require, _)| *lock_require)
+                .map(|(_, (key, _))| key.clone())
+                .collect::<Vec<_>>();
+            if !lock_require_keys.is_empty() {
                 if Self::check_deadlock(&lock_set.locks).is_ok() {
-                    let (tx, rx) = oneshot::channel();
-                    lock_set.txs.insert(id, tx);
-                    Ok(Some(rx))
+                    Ok(Some(
+                        lock_require_keys
+                            .iter()
+                            .cloned()
+                            .map(|key| {
+                                let (tx, rx) = oneshot::channel();
+                                lock_set.txs.insert((key, id), tx);
+                                rx
+                            })
+                            .collect::<Vec<_>>(),
+                    ))
                 } else {
-                    lock_set.locks.insert(key, prev_lock);
+                    for (_, (key, prev_lock)) in lock_results {
+                        lock_set.locks.insert(key, prev_lock);
+                    }
                     Err(anyhow::anyhow!("Deadlock detected"))
                 }
             } else {
                 Ok(None)
             }
         };
-        match rx {
-            Ok(Some(f)) => {
-                f.await.unwrap();
+        match rxs {
+            Ok(Some(fs)) => {
+                for f in fs {
+                    f.await.unwrap();
+                }
                 Ok(())
             }
             Ok(None) => Ok(()),
@@ -237,7 +262,7 @@ impl LockSet {
             if lock.lock_write(id) {
                 if Self::check_deadlock(&lock_set.locks).is_ok() {
                     let (tx, rx) = oneshot::channel();
-                    lock_set.txs.insert(id, tx);
+                    lock_set.txs.insert((key, id), tx);
                     Ok(Some(rx))
                 } else {
                     lock_set.locks.insert(key, prev_lock);
@@ -260,11 +285,16 @@ impl LockSet {
     pub fn unlock(&self, id: TrxId) {
         let mut lock_set = self.0.lock().unwrap();
         let lock_set = &mut *lock_set;
-        for lock in lock_set.locks.values_mut() {
+        for (key, lock) in &mut lock_set.locks {
             if lock.current_lock_ids().contains(&id) {
                 let ids = lock.unlock(id).unwrap();
                 for id in ids {
-                    lock_set.txs.remove(&id).unwrap().send(()).unwrap();
+                    lock_set
+                        .txs
+                        .remove(&(key.clone(), id))
+                        .unwrap()
+                        .send(())
+                        .unwrap();
                 }
             }
         }

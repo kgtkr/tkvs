@@ -1,3 +1,6 @@
+use crate::range_element::BytesRange;
+use crate::RangeElement;
+
 use super::atomic_append;
 use super::lock_set::LockSet;
 use anyhow::Context;
@@ -5,6 +8,7 @@ use bytes::Bytes;
 use nix::sys::stat::Mode;
 use std::collections::BTreeMap;
 
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::fs::OpenOptions;
 
@@ -52,7 +56,8 @@ pub struct Trx {
     lock_set: LockSet,
     id: usize,
     write_set: DataBaseWriteSet,
-    read_set: BTreeMap<Key, Option<Value>>,
+    // valueはロックしているので変わることはないが, 範囲ロックは行わないのでコミット時にキーセットに変化がないかチェックを行う
+    read_set: Vec<(BytesRange, BTreeSet<Key>)>,
 }
 
 impl Drop for Trx {
@@ -63,30 +68,47 @@ impl Drop for Trx {
 
 impl Trx {
     pub async fn get(&mut self, key: &Key) -> anyhow::Result<Option<Value>> {
-        self.lock_set.lock_read(key.clone(), self.id).await?;
+        Ok(self
+            .range(BytesRange::from(
+                RangeElement::Value(key.clone())..RangeElement::NegInfSuffix(key.clone()),
+            ))
+            .await?
+            .into_values()
+            .next())
+    }
 
-        if let Some(value) = self
+    pub async fn range(&mut self, range: BytesRange) -> anyhow::Result<BTreeMap<Key, Value>> {
+        let (tx, rx) = oneshot::channel();
+
+        self.db
+            .0
+            .send(DBMessage::GetRangeWithLock {
+                range: range.clone(),
+                trx_id: self.id,
+                resp: tx,
+            })
+            .await
+            .unwrap();
+
+        let mut values = rx.await.unwrap()?;
+        self.read_set
+            .push((range.clone(), values.keys().cloned().collect()));
+
+        let write_set_values = self
             .write_set
-            .get(key)
-            .cloned()
-            .or_else(|| self.read_set.get(key).cloned())
-        {
-            Ok(value)
-        } else {
-            // ロックしている間は値が変わることはないので複数回のアクセスを防ぐために値をキャッシュする
-            let (tx, rx) = oneshot::channel();
-            self.db
-                .0
-                .send(DBMessage::Get {
-                    key: key.clone(),
-                    resp: tx,
-                })
-                .await
-                .unwrap();
-            let value = rx.await.unwrap();
-            self.read_set.insert(key.clone(), value.clone());
-            Ok(value)
+            .range(range.clone())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        for (key, value) in write_set_values {
+            if let Some(value) = value {
+                values.insert(key.clone(), value.clone());
+            } else {
+                values.remove(&key.clone());
+            }
         }
+
+        Ok(values)
     }
 
     pub async fn put(&mut self, key: Key, value: Value) -> anyhow::Result<()> {
@@ -113,6 +135,7 @@ impl Trx {
             .0
             .send(DBMessage::Commit {
                 write_set: self.write_set.clone(),
+                read_set: self.read_set.clone(),
                 resp: tx,
             })
             .await
@@ -140,11 +163,13 @@ enum DBMessage {
     },
     Commit {
         write_set: DataBaseWriteSet,
+        read_set: Vec<(BytesRange, BTreeSet<Key>)>,
         resp: oneshot::Sender<anyhow::Result<()>>,
     },
-    Get {
-        key: Key,
-        resp: oneshot::Sender<Option<Value>>,
+    GetRangeWithLock {
+        range: BytesRange,
+        trx_id: usize,
+        resp: oneshot::Sender<anyhow::Result<BTreeMap<Key, Value>>>,
     },
 }
 
@@ -264,15 +289,31 @@ impl DB {
                         state.trx_count += 1;
                         let res = Trx {
                             write_set: BTreeMap::new(),
-                            read_set: BTreeMap::new(),
+                            read_set: Vec::new(),
                             id: trx_id,
                             db: db.clone(),
                             lock_set: state.lock_set.clone(),
                         };
                         resp.send(res).unwrap();
                     }
-                    DBMessage::Commit { write_set, resp } => {
+                    DBMessage::Commit {
+                        write_set,
+                        read_set,
+                        resp,
+                    } => {
+                        // TODO: read setチェック
                         let res = (|| {
+                            for (range, expect) in read_set {
+                                let actual = state
+                                    .values
+                                    .range(range)
+                                    .map(|(key, _)| key.clone())
+                                    .collect::<BTreeSet<_>>();
+                                if expect != actual {
+                                    return Err(anyhow::anyhow!("serializable error"));
+                                }
+                            }
+
                             apply_write_set(&mut state.values, &write_set);
 
                             let write_set_bytes = bincode::serialize(&write_set).unwrap();
@@ -280,24 +321,37 @@ impl DB {
                             atomic_append::append(
                                 &mut logs_file_writer,
                                 write_set_bytes.as_slice(),
-                            )?;
+                            )
+                            .unwrap();
                             drop(logs_file_writer);
                             state
                                 .logs_file
                                 .sync_all()
-                                .context("failed to sync log file")?;
+                                .context("failed to sync log file")
+                                .unwrap();
                             state.logs_len += 1;
                             Ok(())
                         })();
-                        let err = res.as_ref().err().map(|e| format!("{}", e));
                         resp.send(res).unwrap();
-                        if let Some(err) = err {
-                            tracing::error!("snapshot error, and shutdown: {}", err);
-                            return;
-                        }
                     }
-                    DBMessage::Get { key, resp } => {
-                        let res = state.values.get(&key).cloned();
+                    DBMessage::GetRangeWithLock {
+                        range,
+                        trx_id,
+                        resp,
+                    } => {
+                        let res = (|| async {
+                            let values = state
+                                .values
+                                .range(range)
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect::<BTreeMap<_, _>>();
+                            state
+                                .lock_set
+                                .lock_read(values.keys().cloned().collect(), trx_id)
+                                .await?;
+                            Ok(values)
+                        })()
+                        .await;
                         resp.send(res).unwrap();
                     }
                 }

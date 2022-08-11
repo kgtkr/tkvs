@@ -1,4 +1,7 @@
 use bytes::Bytes;
+use derive_more::{From, Into};
+use once_cell::sync::Lazy;
+use std::ops;
 
 // 任意の区間を半開区間で表現するためのクエリで使える値
 
@@ -55,5 +58,32 @@ impl PartialOrd for RangeElement {
 impl From<Bytes> for RangeElement {
     fn from(v: Bytes) -> Self {
         RangeElement::Value(v)
+    }
+}
+
+static EMPTY_BYTES: Lazy<Bytes> = Lazy::new(|| Bytes::new());
+
+#[derive(Debug, Clone, Into, From)]
+pub struct BytesRange(ops::Range<RangeElement>);
+
+impl ops::RangeBounds<Bytes> for BytesRange {
+    fn start_bound(&self) -> ops::Bound<&Bytes> {
+        match &self.0.start {
+            RangeElement::Value(v) => ops::Bound::Included(v),
+            RangeElement::NegInfSuffix(v) => ops::Bound::Excluded(v),
+            RangeElement::Inf => ops::Bound::Included(&*EMPTY_BYTES),
+        }
+    }
+
+    fn end_bound(&self) -> ops::Bound<&Bytes> {
+        if let RangeElement::Inf = self.0.start {
+            ops::Bound::Excluded(&*EMPTY_BYTES)
+        } else {
+            match &self.0.end {
+                RangeElement::Value(v) => ops::Bound::Excluded(v),
+                RangeElement::NegInfSuffix(v) => ops::Bound::Included(v),
+                RangeElement::Inf => ops::Bound::Unbounded,
+            }
+        }
     }
 }
