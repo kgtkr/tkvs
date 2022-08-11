@@ -6,6 +6,7 @@ version = "0.1.0"
 [dependencies]
 anyhow = "1.0.58"
 clap = {version = "3.2.16", features = ["derive"]}
+lazy-regex = "2.3.0"
 tkvs-protos = {path = "../protos"}
 tokio = {version = "1.20.1", features = ["full"]}
 tonic = {version = "0.8.0", features = ["tls", "tls-roots"]}

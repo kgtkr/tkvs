@@ -1,8 +1,9 @@
 #![deny(warnings)]
 
-use std::io::Write;
+use std::{io::Write, ops::Bound, str::FromStr};
 
 use clap::{Parser, Subcommand};
+use lazy_regex::regex_captures;
 use tokio::io::AsyncBufReadExt;
 
 #[derive(Parser)]
@@ -23,9 +24,44 @@ enum CmdAction {
     Put { key: String, value: String },
     Get { key: String },
     Delete { key: String },
+    Range { range: Range },
     Commit,
     Abort,
     Snapshot,
+}
+
+#[derive(Debug, Clone)]
+struct Range(Bound<String>, Bound<String>);
+
+impl FromStr for Range {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some((_, start_symbol, start, end, end_symbol)) =
+            regex_captures!(r"^([\(\[])(.*),(.*)([\)\]])$", s)
+        {
+            let start = if start.is_empty() {
+                Bound::Unbounded
+            } else if start_symbol == "[" {
+                Bound::Included(start.to_string())
+            } else {
+                Bound::Excluded(start.to_string())
+            };
+
+            let end = if end.is_empty() {
+                Bound::Unbounded
+            } else if end_symbol == "]" {
+                Bound::Included(end.to_string())
+            } else {
+                Bound::Excluded(end.to_string())
+            };
+
+            Ok(Range(start, end))
+        } else {
+            Err(format!(
+                "invalid range. valid example: [a,b] or (a,b] or [,b] or [,]"
+            ))
+        }
+    }
 }
 
 #[tokio::main]
@@ -104,6 +140,45 @@ async fn main() {
                                         .to_string())
                                     .unwrap_or_else(|| "<none>".to_string())
                             );
+                        }
+                        Err(e) => {
+                            println!("err: {}", e);
+                        }
+                    }
+                }
+                CmdAction::Range { range } => {
+                    fn convert_bound(bound: Bound<String>) -> tkvs_protos::Bound {
+                        tkvs_protos::Bound {
+                            bound: match bound {
+                                Bound::Unbounded => None,
+                                Bound::Included(key) => {
+                                    Some(tkvs_protos::bound::Bound::Inclusive(key.into_bytes()))
+                                }
+                                Bound::Excluded(key) => {
+                                    Some(tkvs_protos::bound::Bound::Exclusive(key.into_bytes()))
+                                }
+                            },
+                        }
+                    }
+
+                    match client
+                        .range(tkvs_protos::RangeRequest {
+                            session_id: session_id.clone(),
+                            start: Some(convert_bound(range.0)),
+                            end: Some(convert_bound(range.1)),
+                        })
+                        .await
+                    {
+                        Ok(result) => {
+                            for tkvs_protos::KeyValue { key, value } in
+                                result.into_inner().key_values
+                            {
+                                println!(
+                                    "{}:{}",
+                                    String::from_utf8_lossy(key.as_slice()),
+                                    String::from_utf8_lossy(value.as_slice())
+                                );
+                            }
                         }
                         Err(e) => {
                             println!("err: {}", e);
