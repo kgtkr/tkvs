@@ -1,0 +1,41 @@
+name: crash-test
+on: workflow_dispatch
+jobs:
+  crash-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: cachix/install-nix-action@v15
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: keep-outputs = true
+      - uses: cachix/cachix-action@v10
+        with:
+          name: kgtkr
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - name: Build devShell
+        run: |
+          nix build .#devShell.$(nix eval --expr 'builtins.currentSystem' --impure --raw) --out-link result-devShell
+          nix print-dev-env > result-devShell.sh
+          echo "BASH_ENV=$PWD/result-devShell.sh" >> $GITHUB_ENV
+      - name: Cache cargo target
+        uses: actions/cache@v3
+        with:
+          path: ./target
+          key: crash-test-cargo-cache-20220811-1-${{ github.sha }}
+          restore-keys: |
+            crash-test-cargo-cache-20220811-1-
+      - name: Cache cargo home
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo
+          key: crash-test-cargo-home-20220811-1-${{ github.sha }}
+          restore-keys: |
+            crash-test-cargo-home-20220811-1-
+      - name: Run crash test
+        run: |
+          make run
+        timeout-minutes: 15
+        working-directory: ./crash-test
+
+
