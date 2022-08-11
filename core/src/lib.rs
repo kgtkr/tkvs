@@ -6,3 +6,5 @@ mod db;
 mod lock_set;
 mod range_element;
 pub use db::{Trx, DB};
+#[cfg(test)]
+mod tests;

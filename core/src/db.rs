@@ -69,7 +69,10 @@ impl Drop for Trx {
 impl Trx {
     pub async fn get(&mut self, key: &Key) -> anyhow::Result<Option<Value>> {
         Ok(self
-            .range(key.clone()..=key.clone())
+            .range_inner(
+                key.clone()..=key.clone(),
+                BTreeSet::from_iter(vec![key.clone()]),
+            )
             .await?
             .into_values()
             .next())
@@ -78,6 +81,14 @@ impl Trx {
     pub async fn range<R: ops::RangeBounds<Key>>(
         &mut self,
         range: R,
+    ) -> anyhow::Result<BTreeMap<Key, Value>> {
+        self.range_inner(range, BTreeSet::new()).await
+    }
+
+    async fn range_inner<R: ops::RangeBounds<Key>>(
+        &mut self,
+        range: R,
+        force_lock_keys: BTreeSet<Key>,
     ) -> anyhow::Result<BTreeMap<Key, Value>> {
         let (tx, rx) = oneshot::channel();
 
@@ -89,6 +100,7 @@ impl Trx {
                 range: range.clone(),
                 trx_id: self.id,
                 resp: tx,
+                force_lock_keys,
             })
             .await
             .unwrap();
@@ -172,6 +184,7 @@ enum DBMessage {
     GetRangeWithLock {
         range: BytesRange,
         trx_id: usize,
+        force_lock_keys: BTreeSet<Key>,
         resp: oneshot::Sender<anyhow::Result<BTreeMap<Key, Value>>>,
     },
 }
@@ -238,8 +251,9 @@ impl DB {
             .context("failed to open log file")?;
 
         let (tx, mut rx) = mpsc::channel(32);
-        let db_ = DB(tx);
-        let db = db_.clone();
+        let (tx_for_trx, mut rx_for_trx) = mpsc::channel(32);
+        let db = DB(tx);
+        let db_for_trx = DB(tx_for_trx);
         tokio::spawn(async move {
             let mut state = DBInner {
                 data_dir,
@@ -250,7 +264,15 @@ impl DB {
                 lock_set: LockSet::new(),
                 lock_file,
             };
-            while let Some(msg) = rx.recv().await {
+            // avoid leak. see: https://github.com/tokio-rs/tokio/issues/4023
+            while let Some(msg) = tokio::select! {
+                Some(msg) = rx_for_trx.recv() => {
+                    Some(msg)
+                },
+                maybe_msg = rx.recv() => {
+                    maybe_msg
+                },
+            } {
                 match msg {
                     DBMessage::Snapshot { resp } => {
                         let res = (|| {
@@ -294,7 +316,7 @@ impl DB {
                             write_set: BTreeMap::new(),
                             read_set: Vec::new(),
                             id: trx_id,
-                            db: db.clone(),
+                            db: db_for_trx.clone(),
                             lock_set: state.lock_set.clone(),
                         };
                         resp.send(res).unwrap();
@@ -340,6 +362,7 @@ impl DB {
                     DBMessage::GetRangeWithLock {
                         range,
                         trx_id,
+                        force_lock_keys,
                         resp,
                     } => {
                         let res = (|| async {
@@ -348,10 +371,9 @@ impl DB {
                                 .range(range)
                                 .map(|(k, v)| (k.clone(), v.clone()))
                                 .collect::<BTreeMap<_, _>>();
-                            state
-                                .lock_set
-                                .lock_read(values.keys().cloned().collect(), trx_id)
-                                .await?;
+                            let mut lock_keys = values.keys().cloned().collect::<BTreeSet<_>>();
+                            lock_keys.extend(force_lock_keys);
+                            state.lock_set.lock_read(lock_keys, trx_id).await?;
                             Ok(values)
                         })()
                         .await;
@@ -361,7 +383,7 @@ impl DB {
             }
         });
 
-        Ok(db_)
+        Ok(db)
     }
 
     pub async fn snapshot(&self) -> anyhow::Result<()> {
@@ -383,27 +405,3 @@ impl Drop for DBInner {
         flock(self.lock_file, FlockArg::Unlock).unwrap();
     }
 }
-
-/*
-#[test]
-fn test() {
-    use rand::distributions::{Alphanumeric, DistString};
-    use rand::{thread_rng, Rng};
-
-    let mut rng = thread_rng();
-    let dirname: String = (0..8).map(|_| rng.sample(Alphanumeric) as char).collect();
-    let data_dir = PathBuf::from("test-data").join(dirname);
-    std::fs::create_dir(&data_dir).unwrap();
-
-    {
-        let mut db = DB::new(data_dir.clone()).unwrap();
-        let trx_id = db.new_trx();
-        db.put(trx_id, b"k1", b"v1");
-        db.commit(trx_id).unwrap();
-        assert_eq!(db.get(trx_id, b"k1"), Some(b"v1".to_vec()));
-        db.put(trx_id, b"k2", b"v2");
-        db.commit(trx_id).unwrap();
-        assert_eq!(db.get(trx_id, b"k1"), Some(b"v1".to_vec()));
-    }
-}
-*/
