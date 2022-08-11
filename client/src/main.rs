@@ -1,10 +1,9 @@
 #![deny(warnings)]
 
-use std::{io::Write, ops::Bound, str::FromStr};
-
 use clap::{Parser, Subcommand};
 use lazy_regex::regex_captures;
-use tokio::io::AsyncBufReadExt;
+use rustyline::Editor;
+use std::{ops::Bound, str::FromStr};
 
 #[derive(Parser)]
 #[clap(name = "tkvs-client", author = "kgtkr")]
@@ -95,14 +94,12 @@ async fn main() {
         });
     }
 
-    let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+    let mut rl = Editor::<()>::new().unwrap();
 
-    while let Some(line) = {
-        print!("> ");
-        std::io::stdout().flush().unwrap();
-        lines.next_line().await.unwrap()
-    } {
+    while let Ok(line) = rl.readline("> ") {
         let arg = CmdArg::try_parse_from(&mut std::iter::once("").chain(line.split_whitespace()));
+        rl.add_history_entry(line.as_str());
+
         match arg {
             Ok(arg) => match arg.action {
                 CmdAction::Put { key, value } => {
