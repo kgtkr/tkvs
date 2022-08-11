@@ -32,6 +32,11 @@ jobs:
           key: crash-test-cargo-home-20220811-1-${{ github.sha }}
           restore-keys: |
             crash-test-cargo-home-20220811-1-
+      - name: Cache image
+        uses: actions/cache@v3
+        with:
+          path: crash-test/image.qcow2
+          key: crash-test-image-20220812-1-${{ hashFiles('crash-test/image-url') }}
       - name: Run crash test
         run: |
           make run
