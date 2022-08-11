@@ -4,6 +4,6 @@
 mod atomic_append;
 mod db;
 mod lock_set;
-mod query_value;
+mod range_element;
 pub use db::{Trx, DB};
-pub use query_value::QueryValue;
+pub use range_element::RangeElement;
