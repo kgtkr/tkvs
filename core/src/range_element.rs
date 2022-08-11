@@ -61,7 +61,7 @@ impl From<Bytes> for RangeElement {
     }
 }
 
-static EMPTY_BYTES: Lazy<Bytes> = Lazy::new(|| Bytes::new());
+static EMPTY_BYTES: Lazy<Bytes> = Lazy::new(Bytes::new);
 
 #[derive(Debug, Clone, Into, From)]
 pub struct BytesRange(ops::Range<RangeElement>);

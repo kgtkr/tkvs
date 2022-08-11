@@ -56,9 +56,7 @@ impl FromStr for Range {
 
             Ok(Range(start, end))
         } else {
-            Err(format!(
-                "invalid range. valid example: [a,b] or (a,b] or [,b] or [,]"
-            ))
+            Err("invalid range. valid example: [a,b] or (a,b] or [,b] or [,]".to_string())
         }
     }
 }

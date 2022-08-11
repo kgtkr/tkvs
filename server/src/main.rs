@@ -1,4 +1,5 @@
 #![deny(warnings)]
+#![allow(clippy::mutable_key_type)] // bytes::Bytes で問題が発生するため
 
 use bytes::Bytes;
 use rand::{distributions::Alphanumeric, Rng};
