@@ -4020,10 +4020,6 @@ rec {
             packageId = "once_cell";
           }
           {
-            name = "rand";
-            packageId = "rand";
-          }
-          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -4044,6 +4040,12 @@ rec {
           {
             name = "tracing";
             packageId = "tracing";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "rand";
+            packageId = "rand";
           }
         ];
 
