@@ -80,14 +80,7 @@ impl MaybeLock {
                 writers,
                 readers: _,
             }) => match current_lock {
-                CurrentLock::Read(cur_ids)
-                    if cur_ids
-                        == &({
-                            let mut set = HashSet::new();
-                            set.insert(id);
-                            set
-                        }) =>
-                {
+                CurrentLock::Read(cur_ids) if cur_ids == &HashSet::from([id]) => {
                     *current_lock = CurrentLock::Write(id);
                     false
                 }
