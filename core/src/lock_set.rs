@@ -12,13 +12,13 @@ use tokio::sync::oneshot;
 type TrxId = usize;
 type RecordKey = Bytes;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum CurrentLock {
     Read(HashSet<TrxId>),
     Write(TrxId),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Lock {
     current_lock: CurrentLock,
     // トランザクションは直列に実行されるため, TrxIdは重複しない
@@ -26,7 +26,7 @@ struct Lock {
     readers: HashSet<TrxId>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum MaybeLock {
     Locked(Lock),
     Unlocked,
@@ -346,5 +346,84 @@ impl LockSet {
         } else {
             Err(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_lock {
+    use std::collections::HashSet;
+
+    use super::MaybeLock;
+
+    #[test]
+    fn can_multiple_read() {
+        let mut lock = MaybeLock::Unlocked;
+        assert_eq!(lock.lock_read(0), false);
+        assert_eq!(lock.lock_read(1), false);
+
+        assert_eq!(lock.unlock(0).unwrap(), HashSet::new());
+        assert_eq!(lock.unlock(1).unwrap(), HashSet::new());
+
+        assert_eq!(lock, MaybeLock::Unlocked);
+    }
+
+    #[test]
+    fn deny_multiple_write() {
+        let mut lock = MaybeLock::Unlocked;
+        assert_eq!(lock.lock_write(0), false);
+        assert_eq!(lock.lock_write(1), true);
+        assert_eq!(lock.unlock(0).unwrap(), HashSet::from([1]));
+        assert_eq!(lock.unlock(1).unwrap(), HashSet::new());
+
+        assert_eq!(lock, MaybeLock::Unlocked);
+    }
+
+    #[test]
+    fn deny_read_write() {
+        let mut lock = MaybeLock::Unlocked;
+        assert_eq!(lock.lock_read(0), false);
+        assert_eq!(lock.lock_write(1), true);
+        assert_eq!(lock.unlock(0).unwrap(), HashSet::from([1]));
+        assert_eq!(lock.unlock(1).unwrap(), HashSet::new());
+
+        assert_eq!(lock, MaybeLock::Unlocked);
+    }
+
+    #[test]
+    fn prefer_write() {
+        let mut lock = MaybeLock::Unlocked;
+        assert_eq!(lock.lock_read(0), false);
+        assert_eq!(lock.lock_write(1), true);
+        assert_eq!(lock.lock_read(2), true);
+
+        assert_eq!(lock.unlock(0).unwrap(), HashSet::from([1]));
+        assert_eq!(lock.unlock(1).unwrap(), HashSet::from([2]));
+        assert_eq!(lock.unlock(2).unwrap(), HashSet::new());
+
+        assert_eq!(lock, MaybeLock::Unlocked);
+    }
+
+    #[test]
+    fn promote_read_to_write() {
+        let mut lock = MaybeLock::Unlocked;
+        assert_eq!(lock.lock_read(0), false);
+        assert_eq!(lock.lock_write(1), true);
+        assert_eq!(lock.lock_write(0), false);
+        assert_eq!(lock.unlock(0).unwrap(), HashSet::from([1]));
+        assert_eq!(lock.unlock(1).unwrap(), HashSet::from([]));
+
+        assert_eq!(lock, MaybeLock::Unlocked);
+    }
+
+    #[test]
+    fn deny_promote_read_to_write() {
+        let mut lock = MaybeLock::Unlocked;
+        assert_eq!(lock.lock_read(0), false);
+        assert_eq!(lock.lock_read(1), false);
+        assert_eq!(lock.lock_write(0), true);
+        assert_eq!(lock.unlock(1).unwrap(), HashSet::from([0]));
+        assert_eq!(lock.unlock(0).unwrap(), HashSet::from([]));
+
+        assert_eq!(lock, MaybeLock::Unlocked);
     }
 }
