@@ -1,5 +1,5 @@
 name: crash-test
-on: workflow_dispatch
+on: push
 jobs:
   crash-test:
     runs-on: ubuntu-latest
