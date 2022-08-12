@@ -419,4 +419,30 @@ mod tests_lock {
 
         assert_eq!(lock, MaybeLock::Unlocked);
     }
+
+    #[test]
+    fn already_read_lock() {
+        let mut lock = MaybeLock::Unlocked;
+        assert_eq!(lock.lock_read(0), false);
+        assert_eq!(lock.lock_write(1), true);
+        assert_eq!(lock.lock_read(0), false);
+
+        assert_eq!(lock.unlock(0).unwrap(), HashSet::from([1]));
+        assert_eq!(lock.unlock(1).unwrap(), HashSet::from([]));
+
+        assert_eq!(lock, MaybeLock::Unlocked);
+    }
+
+    #[test]
+    fn already_write_lock() {
+        let mut lock = MaybeLock::Unlocked;
+        assert_eq!(lock.lock_write(0), false);
+        assert_eq!(lock.lock_write(1), true);
+        assert_eq!(lock.lock_write(0), false);
+
+        assert_eq!(lock.unlock(0).unwrap(), HashSet::from([1]));
+        assert_eq!(lock.unlock(1).unwrap(), HashSet::from([]));
+
+        assert_eq!(lock, MaybeLock::Unlocked);
+    }
 }
