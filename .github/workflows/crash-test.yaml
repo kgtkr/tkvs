@@ -37,12 +37,25 @@ jobs:
         with:
           path: |
             crash-test/image.qcow2
-            crash-test/disk.qcow2
           key: crash-test-image-20220812-1-${{ hashFiles('crash-test/image-url') }}
+      - name: Cache disk
+        id: cache-disk
+        uses: actions/cache@v3
+        with:
+          path: |
+            crash-test/disk.qcow2
+          key: crash-test-disk-20220812-1-${{ hashFiles('crash-test/image-url') }}
+      # 一回適当に再起動しないと起動しない
+      - name: OS init
+        if: steps.cache-disk.outputs.cache-hit != 'true'
+        run: |
+          make up-vm &
+          sleep 5m
+          kill %1
       - name: Run crash test
         run: |
           make run
-        timeout-minutes: 30
+        timeout-minutes: 15
         working-directory: ./crash-test
 
 
