@@ -56,11 +56,11 @@
               ];
               pathsToLink = [ "/bin" ];
               postBuild = ''
-              mkdir -p data
+                mkdir -p data
               '';
             };
             config = {
-              Env = [ "TKVS_IP=0.0.0.0" "TKVS_PORT=50051" "TKVS_DATA=/data" "RUST_LOG=info"];
+              Env = [ "TKVS_IP=0.0.0.0" "TKVS_PORT=50051" "TKVS_DATA=/data" "RUST_LOG=info" ];
               Entrypoint = [ "/bin/tkvs-server" ];
               Volumes = { "/data" = { }; };
             };
@@ -92,12 +92,15 @@
           };
         devShells.x86_64-linux-cross =
           let
-            pkgs = (import nixpkgs {
-              system = if system == "aarch64-darwin" then "x86_64-darwin" else system;
-              crossSystem = "x86_64-linux";
-            }).pkgsStatic;
+            linuxPkgs =
+              if system == "x86_64-linux"
+              then pkgs
+              else (import nixpkgs {
+                system = if system == "aarch64-darwin" then "x86_64-darwin" else system;
+                crossSystem = "x86_64-linux";
+              }).pkgsStatic;
           in
-          with pkgs; mkShell {
+          with linuxPkgs; mkShell {
             nativeBuildInputs = [
               pkg-config
             ];
