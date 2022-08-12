@@ -3,12 +3,13 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay.url = "github:oxalica/rust-overlay";
+    kgtkr-nixpkgs.url = "github:kgtkr/kgtkr-nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay, ... }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, kgtkr-nixpkgs, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        overlays = [ (import rust-overlay) ];
+        overlays = [ (import rust-overlay) kgtkr-nixpkgs.overlay ];
         pkgsArgs = {
           inherit system overlays;
         };
@@ -77,6 +78,7 @@
               patchelf
               crate2nix
               pkg-config
+              cloud-localds
             ];
             buildInputs = lib.optionals stdenv.isDarwin [
               libiconv

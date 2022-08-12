@@ -24,14 +24,18 @@ image.qcow2:
 disk.qcow2: image.qcow2
 	cp image.qcow2 disk.qcow2
 
+cloud.img: cloud.txt
+	cloud-localds --disk-format qcow2 cloud.img cloud.txt
+
 .PHONY: clean-vm
 clean-vm:
 	rm disk.qcow2
 
 .PHONY: up-vm
-up-vm: disk.qcow2
+up-vm: disk.qcow2 cloud.img
 	qemu-system-x86_64 -m 1024 -smp 10 -nographic \
 		-drive file=disk.qcow2,if=virtio \
+		-drive if=virtio,readonly=true,file=cloud.img \
 		-net nic -net user,hostfwd=tcp::$(ssh_port)-:22,hostfwd=tcp::$(grpc_port)-:50051
 
 .PHONY: wait-vm
