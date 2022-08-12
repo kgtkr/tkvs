@@ -35,12 +35,14 @@ jobs:
       - name: Cache image
         uses: actions/cache@v3
         with:
-          path: crash-test/image.qcow2
+          path: |
+            crash-test/image.qcow2
+            crash-test/disk.qcow2
           key: crash-test-image-20220812-1-${{ hashFiles('crash-test/image-url') }}
       - name: Run crash test
         run: |
           make run
-        timeout-minutes: 20
+        timeout-minutes: 30
         working-directory: ./crash-test
 
 
