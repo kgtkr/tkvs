@@ -3,12 +3,13 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay.url = "github:oxalica/rust-overlay";
+    kgtkr-nixpkgs.url = "github:kgtkr/kgtkr-nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay, ... }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, kgtkr-nixpkgs, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        overlays = [ (import rust-overlay) ];
+        overlays = [ (import rust-overlay) kgtkr-nixpkgs.overlay ];
         pkgsArgs = {
           inherit system overlays;
         };
@@ -55,11 +56,11 @@
               ];
               pathsToLink = [ "/bin" ];
               postBuild = ''
-              mkdir -p data
+                mkdir -p data
               '';
             };
             config = {
-              Env = [ "TKVS_IP=0.0.0.0" "TKVS_PORT=50051" "TKVS_DATA=/data" "RUST_LOG=info"];
+              Env = [ "TKVS_IP=0.0.0.0" "TKVS_PORT=50051" "TKVS_DATA=/data" "RUST_LOG=info" ];
               Entrypoint = [ "/bin/tkvs-server" ];
               Volumes = { "/data" = { }; };
             };
@@ -77,6 +78,7 @@
               patchelf
               crate2nix
               pkg-config
+              cloud-localds
             ];
             buildInputs = lib.optionals stdenv.isDarwin [
               libiconv
@@ -90,12 +92,15 @@
           };
         devShells.x86_64-linux-cross =
           let
-            pkgs = (import nixpkgs {
-              system = if system == "aarch64-darwin" then "x86_64-darwin" else system;
-              crossSystem = "x86_64-linux";
-            }).pkgsStatic;
+            linuxPkgs =
+              if system == "x86_64-linux"
+              then pkgs
+              else (import nixpkgs {
+                system = if system == "aarch64-darwin" then "x86_64-darwin" else system;
+                crossSystem = "x86_64-linux";
+              }).pkgsStatic;
           in
-          with pkgs; mkShell {
+          with linuxPkgs; mkShell {
             nativeBuildInputs = [
               pkg-config
             ];

@@ -18,20 +18,24 @@ runN:
 tkvs-server:
 	cd .. && nix develop .#x86_64-linux-cross -c cargo build --target x86_64-unknown-linux-musl && cp target/x86_64-unknown-linux-musl/debug/tkvs-server crash-test/tkvs-server
 
-Arch-Linux-x86_64-basic.qcow2:
-	wget https://geo.mirror.pkgbuild.com/images/v20220801.71902/Arch-Linux-x86_64-basic.qcow2
+image.qcow2:
+	wget $$(cat image-url) -O image.qcow2
 
-disk.qcow2: Arch-Linux-x86_64-basic.qcow2
-	cp Arch-Linux-x86_64-basic.qcow2 disk.qcow2
+disk.qcow2: image.qcow2
+	cp image.qcow2 disk.qcow2
+
+cloud.img: cloud.txt
+	cloud-localds --disk-format qcow2 cloud.img cloud.txt
 
 .PHONY: clean-vm
 clean-vm:
 	rm disk.qcow2
 
 .PHONY: up-vm
-up-vm: disk.qcow2
+up-vm: disk.qcow2 cloud.img
 	qemu-system-x86_64 -m 1024 -smp 10 -nographic \
 		-drive file=disk.qcow2,if=virtio \
+		-drive if=virtio,readonly=true,file=cloud.img \
 		-net nic -net user,hostfwd=tcp::$(ssh_port)-:22,hostfwd=tcp::$(grpc_port)-:50051
 
 .PHONY: wait-vm
