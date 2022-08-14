@@ -97,8 +97,7 @@
               then pkgs
               else (import nixpkgs {
                 system = if system == "aarch64-darwin" then "x86_64-darwin" else system;
-                crossSystem = "x86_64-linux";
-              }).pkgsStatic;
+              }).pkgsCross.musl64.pkgsStatic;
           in
           with linuxPkgs; mkShell {
             nativeBuildInputs = [
